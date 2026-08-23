@@ -6,6 +6,26 @@
 
 Windows 安装包即装即用，无需任何配置。
 
+
+
+# Show Time
+
+![image-20260823134700780](C:\Users\TY\AppData\Roaming\Typora\typora-user-images\image-20260823134700780.png)
+
+![image-20260823134709598](C:\Users\TY\AppData\Roaming\Typora\typora-user-images\image-20260823134709598.png)
+
+![image-20260823134718558](C:\Users\TY\AppData\Roaming\Typora\typora-user-images\image-20260823134718558.png)
+
+![image-20260823134737415](C:\Users\TY\AppData\Roaming\Typora\typora-user-images\image-20260823134737415.png)
+
+![image-20260823134810742](C:\Users\TY\AppData\Roaming\Typora\typora-user-images\image-20260823134810742.png)
+
+![image-20260823134932220](C:\Users\TY\AppData\Roaming\Typora\typora-user-images\image-20260823134932220.png)
+
+
+
+
+
 ---
 
 ## 为什么选择 BetterNotepad？
