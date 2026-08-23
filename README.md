@@ -10,17 +10,17 @@ Windows 安装包即装即用，无需任何配置。
 
 # Show Time
 
-![image-20260823134700780](C:\Users\TY\AppData\Roaming\Typora\typora-user-images\image-20260823134700780.png)
+![image-20260823134700780](https://cdn.jsdelivr.net/gh/MeteorKai/blogImage2@main/img/image-20260823134700780.png)
 
-![image-20260823134709598](C:\Users\TY\AppData\Roaming\Typora\typora-user-images\image-20260823134709598.png)
+![image-20260823134709598](https://cdn.jsdelivr.net/gh/MeteorKai/blogImage2@main/img/image-20260823134709598.png)
 
-![image-20260823134718558](C:\Users\TY\AppData\Roaming\Typora\typora-user-images\image-20260823134718558.png)
+![image-20260823134718558](https://cdn.jsdelivr.net/gh/MeteorKai/blogImage2@main/img/image-20260823134718558.png)
 
-![image-20260823134737415](C:\Users\TY\AppData\Roaming\Typora\typora-user-images\image-20260823134737415.png)
+![image-20260823134737415](https://cdn.jsdelivr.net/gh/MeteorKai/blogImage2@main/img/image-20260823134737415.png)
 
-![image-20260823134810742](C:\Users\TY\AppData\Roaming\Typora\typora-user-images\image-20260823134810742.png)
+![image-20260823134810742](https://cdn.jsdelivr.net/gh/MeteorKai/blogImage2@main/img/image-20260823134810742.png)
 
-![image-20260823134932220](C:\Users\TY\AppData\Roaming\Typora\typora-user-images\image-20260823134932220.png)
+![image-20260823134932220](https://cdn.jsdelivr.net/gh/MeteorKai/blogImage2@main/img/image-20260823134932220.png)
 
 
 
