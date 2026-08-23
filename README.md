@@ -165,6 +165,16 @@ Windows 11 的默认应用由系统"打开方式"决定：右键文件 → 打�
 
 ---
 
+
+
+# Contact Me
+
+QQ：1318723916
+
+使用过程中遇到bug等问题欢迎提出！
+
+
+
 ## 技术栈
 
 Tauri 2 · React 19 · TypeScript · Tailwind CSS v4 · PrismJS · Three.js
