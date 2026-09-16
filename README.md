@@ -54,6 +54,8 @@ Windows 安装包即装即用，无需任何配置。
 从 **[Releases](../../releases)** 下载最新安装包：
 
 - `BetterNotepad_0.1.0_x64-setup.exe`
+- `BetterNotepad_0.2.0_x64-setup.exe`
+- `BetterNotepad_0.2.1_x64-setup.exe`
 
 双击安装即可。安装后 `.txt` 文件默认关联到 BetterNotepad（若未自动关联，右键文件 → 打开方式 → 选择 BetterNotepad → 始终）。
 
