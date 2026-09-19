@@ -6,26 +6,6 @@
 
 Windows 安装包即装即用，无需任何配置。
 
-
-
-# Show Time
-
-![image-20260823134700780](https://cdn.jsdelivr.net/gh/MeteorKai/blogImage2@main/img/image-20260823134700780.png)
-
-![image-20260823134709598](https://cdn.jsdelivr.net/gh/MeteorKai/blogImage2@main/img/image-20260823134709598.png)
-
-![image-20260823134718558](https://cdn.jsdelivr.net/gh/MeteorKai/blogImage2@main/img/image-20260823134718558.png)
-
-![image-20260823134737415](https://cdn.jsdelivr.net/gh/MeteorKai/blogImage2@main/img/image-20260823134737415.png)
-
-![image-20260823134810742](https://cdn.jsdelivr.net/gh/MeteorKai/blogImage2@main/img/image-20260823134810742.png)
-
-![image-20260823134932220](https://cdn.jsdelivr.net/gh/MeteorKai/blogImage2@main/img/image-20260823134932220.png)
-
-
-
-
-
 ---
 
 ## 为什么选择 BetterNotepad？
@@ -43,6 +23,7 @@ Windows 安装包即装即用，无需任何配置。
 | 跨文件搜索 | ✗ | ✓ | ✓ 一键搜索整个文件夹 |
 | 文件管理 | ✗ | 需插件 | ✓ 内置文件树，新建/重命名/删除 |
 | 行尾 / 编码切换 | ✗ | ✓ | ✓ LF / CRLF，混合行尾自动修复 |
+| 自动检查更新 | ✗ | ✗ | ✓ 启动静默检查，应用内一键安装 |
 | 3D 看板娘 | ✗ | ✗ | ✓ 可拖拽互动的可爱看板娘 |
 
 **一句话**：打开即用、界面现代、功能完整的记事本 + 轻量 IDE 合体。
@@ -53,11 +34,9 @@ Windows 安装包即装即用，无需任何配置。
 
 从 **[Releases](../../releases)** 下载最新安装包：
 
-- `BetterNotepad_0.1.0_x64-setup.exe`
-- `BetterNotepad_0.2.0_x64-setup.exe`
-- `BetterNotepad_0.2.1_x64-setup.exe`
+- `BetterNotepad_<版本号>_x64-setup.exe`
 
-双击安装即可。安装后 `.txt` 文件默认关联到 BetterNotepad（若未自动关联，右键文件 → 打开方式 → 选择 BetterNotepad → 始终）。
+双击安装即可。安装后 `.txt` 文件默认关联到 BetterNotepad（若未自动关联，右键文件 → 打开方式 → 选择 BetterNotepad → 始终）。装好之后不必再手动下载新版本，应用会自己检查更新。
 
 ---
 
@@ -83,7 +62,10 @@ Windows 安装包即装即用，无需任何配置。
 - 最近文件列表
 - 编码选择：UTF-8 / UTF-8 BOM / GBK / UTF-16 LE / UTF-16 BE
 - 行尾：自动识别 LF / CRLF，新建文件可选默认，混合行尾保存时自动统一
-- 拖拽打开文件、"打开方式"打开文件
+- 拖拽打开文件、"打开方式"打开文件（**单实例**：应用已在运行时，文件作为新标签页开在同一个窗口，不会双开）
+- **资源管理器右键菜单**：「以 BetterNotepad 编辑」直接开任意文件；写在 HKCU、无需管理员权限，
+  安装时添加、卸载时清理，可在 设置 › 通用 中关闭
+  （Windows 11 上它位于「显示更多选项」/ Shift+F10 之中 —— 一级菜单只接受 MSIX 打包的应用）
 
 ### 文件管理
 - 侧边栏文件树：新建文件/文件夹、重命名、删除、自动定位当前文件
@@ -97,6 +79,7 @@ Windows 安装包即装即用，无需任何配置。
 ### 其他
 - Markdown **实时预览**（带代码高亮，可分栏调比例）
 - 三套主题一键切换并记住
+- **中英双语界面**，默认跟随系统语言
 - 3D 看板娘：可拖拽、点击互动、打字鼓励
 
 ---
@@ -130,6 +113,14 @@ Windows 安装包即装即用，无需任何配置。
 - **默认行尾**：LF / CRLF
 - **字体**：内置多种等宽字体族（Consolas / Cascadia Code / JetBrains Mono / Fira Code / 微软雅黑…）
 - **字号**（8–32，与 `Ctrl+=/-` 联动）
+
+### 界面语言
+点击工具栏 **齿轮** → **通用** 页签 → **语言**：
+
+- **跟随系统**（默认）：按系统语言自动选择中文或英文
+- **简体中文** / **English**：固定使用某一种
+
+切换后界面立即刷新，设置保存在本地，无需重启。
 
 ### 正则查找示例
 
@@ -167,15 +158,52 @@ Windows 11 的默认应用由系统"打开方式"决定：右键文件 → 打�
 
 ---
 
+## 自动更新
 
+应用启动几秒后会在后台**静默检查**一次 GitHub Releases —— 检查失败（断网、GitHub 抽风）不会有任何提示，只有真的发现新版本时才会在 **设置 → About** 页签上出现一个小圆点。
 
-# Contact Me
+手动检查：**设置 → About → Check for updates**。发现新版本会显示版本号与更新说明，点 **Download and install** 直接在应用内下载安装，装完自动重启，**未保存的内容会在重启后恢复**。
 
-QQ：1318723916
+更新包使用 ed25519 签名，应用内置公钥校验，签名不匹配的包不会被安装。
 
-使用过程中遇到bug等问题欢迎提出！
+---
 
+## 发版流程（维护者）
 
+客户端依赖三样东西，**必须一起上传到同一个 Release**：安装包、它的 `.sig` 签名、以及 `latest.json`。
+
+1. 改版本号（`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`package.json`、`package-lock.json`），并更新 `更新日志.txt`。
+2. 设置签名密钥 —— **每次构建都需要**。缺了它打包会在最后一步报
+   `A public key has been found, but no private key` 并且不产出 `.sig`：
+   ```powershell
+   $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -Raw "C:\Users\TY\.tauri\betternotepad.key"
+   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<密钥密码>"
+   ```
+   > 注意：打包器只认 `TAURI_SIGNING_PRIVATE_KEY`（**密钥内容**）。`TAURI_SIGNING_PRIVATE_KEY_PATH`
+   > 只对 `tauri signer sign` 生效，别用错。
+   > 密码存在 `C:\Users\TY\.tauri\betternotepad.key.password.txt`。
+3. 打包：
+   ```powershell
+   npm run tauri build
+   ```
+   `src-tauri/target/release/bundle/nsis/` 下会多出：
+   - `BetterNotepad_<版本>_x64-setup.exe`
+   - `BetterNotepad_<版本>_x64-setup.exe.sig`
+4. 生成 `latest.json`：
+   ```powershell
+   npm run latest-json -- --notes "本次更新内容"
+   ```
+5. 在 GitHub 新建 Release，tag 用 `v<版本>`（例：`v0.2.4`），上传上面三个文件。
+
+两点不能错：
+
+- `latest.json` 这个**文件名不能改** —— 应用请求的是 `releases/latest/download/latest.json`。
+- **版本号必须递增**，否则客户端不会认为存在更新（当前版本号不会更新到相同版本号）。
+
+> 私钥 `C:\Users\TY\.tauri\betternotepad.key` 一旦丢失，就再也无法给**已安装的用户**推送更新 —— 请务必备份。
+> 公钥在 `tauri.conf.json` 的 `plugins.updater.pubkey`，已内置进应用，除非有计划的密钥轮换，否则不要更换。
+
+---
 
 ## 技术栈
 

@@ -1,0 +1,30 @@
+[package]
+name = "notepad-app"
+version = "0.2.5"
+description = "A beautiful notepad application"
+authors = ["you"]
+edition = "2021"
+
+[lib]
+name = "notepad_app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+encoding_rs = "0.8"
+tauri-plugin-opener = "2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
+[target.'cfg(windows)'.dependencies]
+# Explorer context-menu integration. Already in the tree as a transitive
+# dependency, so declaring it directly costs nothing extra to build.
+winreg = "0.55"

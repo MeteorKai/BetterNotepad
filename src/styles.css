@@ -1,0 +1,495 @@
+@import "tailwindcss";
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  overflow: hidden;
+  background: var(--surface);
+}
+
+/* =====================================================================
+   Design tokens — three themes (dark is the default)
+   ===================================================================== */
+
+:root,
+[data-theme="dark"] {
+  --surface: #17171c;
+  --panel: #1f1f26;
+  --panel-2: #1b1b21;
+  --elevated: #26262e;
+  --hover: #2c2c35;
+  --active: #34343f;
+  --ink: #e4e4ea;
+  --sub: #9898a5;
+  --faint: #63636f;
+  --line: #31313b;
+  --line-soft: #26262e;
+  --accent: #a99ff0;
+  --accent-strong: #b9b0f6;
+  --accent-ink: #1b1b21;
+  --accent-soft: rgba(169, 159, 240, 0.16);
+  --accent-soft-strong: rgba(169, 159, 240, 0.28);
+  --danger: #f38ba8;
+  --warn: #e0b775;
+
+  --editor-bg: #1a1a20;
+  --gutter-bg: #17171c;
+  --gutter-text: #5f5f6b;
+  --caret: #e4e4ea;
+  --placeholder: #5a5a66;
+  --selection: rgba(169, 159, 240, 0.28);
+
+  --match-bg: rgba(169, 159, 240, 0.22);
+  --match-current-bg: rgba(169, 159, 240, 0.44);
+
+  --dot-color: rgba(255, 255, 255, 0.035);
+  --glow-color: rgba(169, 159, 240, 0.16);
+  --card-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+
+  --tok-comment: #767683;
+  --tok-punctuation: #9494a1;
+  --tok-property: #ee8fae;
+  --tok-boolean: #eab07f;
+  --tok-selector: #9ed3a8;
+  --tok-operator: #86cdc6;
+  --tok-keyword: #b7a8f5;
+  --tok-function: #8fb4f5;
+  --tok-class: #e3c98a;
+  --tok-regex: #ee8fae;
+}
+
+[data-theme="light"] {
+  --surface: #fbfbfd;
+  --panel: #f3f3f7;
+  --panel-2: #efeff5;
+  --elevated: #ffffff;
+  --hover: #ebebf2;
+  --active: #e3e3ec;
+  --ink: #2c2c34;
+  --sub: #6d6d7a;
+  --faint: #9d9daa;
+  --line: #e6e6ee;
+  --line-soft: #ececf3;
+  --accent: #8f7fe0;
+  --accent-strong: #7d6cd8;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(143, 127, 224, 0.14);
+  --accent-soft-strong: rgba(143, 127, 224, 0.24);
+  --danger: #d66a88;
+  --warn: #c9a24b;
+
+  --editor-bg: #ffffff;
+  --gutter-bg: #fbfbfd;
+  --gutter-text: #b0b0bd;
+  --caret: #2c2c34;
+  --placeholder: #b3b3c0;
+  --selection: rgba(143, 127, 224, 0.24);
+
+  --match-bg: rgba(143, 127, 224, 0.18);
+  --match-current-bg: rgba(143, 127, 224, 0.38);
+
+  --dot-color: rgba(24, 24, 48, 0.035);
+  --glow-color: rgba(143, 127, 224, 0.13);
+  --card-shadow: 0 6px 24px rgba(30, 30, 60, 0.08);
+
+  --tok-comment: #9599a6;
+  --tok-punctuation: #6d6d7a;
+  --tok-property: #c25b7a;
+  --tok-boolean: #c97f3d;
+  --tok-selector: #4f9d6a;
+  --tok-operator: #3a9a92;
+  --tok-keyword: #7d6cd8;
+  --tok-function: #4a7fd0;
+  --tok-class: #a07d2e;
+  --tok-regex: #c25b7a;
+}
+
+[data-theme="warm"] {
+  --surface: #f7f2e8;
+  --panel: #efe8d8;
+  --panel-2: #ece3d1;
+  --elevated: #fbf7ee;
+  --hover: #e8dfcb;
+  --active: #ded3bb;
+  --ink: #433c30;
+  --sub: #80745f;
+  --faint: #ab9d86;
+  --line: #e3d9c6;
+  --line-soft: #e7ddc8;
+  --accent: #a08fd8;
+  --accent-strong: #8f7ccd;
+  --accent-ink: #ffffff;
+  --accent-soft: rgba(160, 143, 216, 0.16);
+  --accent-soft-strong: rgba(160, 143, 216, 0.28);
+  --danger: #c96a75;
+  --warn: #b98a44;
+
+  --editor-bg: #fbf6eb;
+  --gutter-bg: #f7f2e8;
+  --gutter-text: #b7ab94;
+  --caret: #433c30;
+  --placeholder: #b3a78f;
+  --selection: rgba(160, 143, 216, 0.26);
+
+  --match-bg: rgba(160, 143, 216, 0.2);
+  --match-current-bg: rgba(160, 143, 216, 0.4);
+
+  --dot-color: rgba(122, 96, 55, 0.05);
+  --glow-color: rgba(160, 143, 216, 0.14);
+  --card-shadow: 0 6px 24px rgba(95, 65, 35, 0.1);
+
+  --tok-comment: #a09580;
+  --tok-punctuation: #80745f;
+  --tok-property: #b85e76;
+  --tok-boolean: #c07a34;
+  --tok-selector: #54845f;
+  --tok-operator: #3d8f86;
+  --tok-keyword: #8a76c9;
+  --tok-function: #4674b8;
+  --tok-class: #9a7430;
+  --tok-regex: #b85e76;
+}
+
+/* Tailwind semantic color utilities (resolve to the runtime CSS vars above) */
+@theme inline {
+  --color-surface: var(--surface);
+  --color-panel: var(--panel);
+  --color-panel-2: var(--panel-2);
+  --color-elevated: var(--elevated);
+  --color-hover: var(--hover);
+  --color-active: var(--active);
+  --color-ink: var(--ink);
+  --color-sub: var(--sub);
+  --color-faint: var(--faint);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-accent: var(--accent);
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-warn: var(--warn);
+  --color-editor: var(--editor-bg);
+  --color-gutter: var(--gutter-bg);
+  --color-gutter-text: var(--gutter-text);
+  --color-caret: var(--caret);
+  --color-placeholder: var(--placeholder);
+  --color-selection: var(--selection);
+}
+
+/* =====================================================================
+   Decorations — soft dot grid + gradient glows
+   ===================================================================== */
+
+.pattern-dots {
+  background-image: radial-gradient(var(--dot-color) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.glow-orb {
+  position: absolute;
+  border-radius: 9999px;
+  filter: blur(48px);
+  background: var(--glow-color);
+  pointer-events: none;
+}
+
+.accent-chip {
+  background: var(--accent-soft);
+  color: var(--accent);
+  transition: background-color 150ms ease;
+}
+.accent-chip:hover {
+  background: var(--accent-soft-strong);
+}
+
+.shadow-card {
+  box-shadow: var(--card-shadow);
+}
+
+/* =====================================================================
+   CodeMirror editor
+   CodeMirror injects its base theme after this stylesheet, so these rules
+   are scoped under .cm-editor to outrank it.
+   ===================================================================== */
+.cm-editor {
+  height: 100%;
+  background: var(--editor-bg);
+  color: var(--ink);
+}
+.cm-editor.cm-focused {
+  outline: none;
+}
+/* The host element sets font-family and font-size; the base theme would
+   otherwise pin the scroller to a generic monospace stack. */
+.cm-editor .cm-scroller {
+  font-family: inherit;
+  line-height: 1.6;
+}
+/* The horizontal inset MUST live on `.cm-line`, never on `.cm-content`.
+   CodeMirror's selection layer derives the edges of the full-width selection
+   band from `contentRect` plus `.cm-line`'s own paddingLeft/paddingRight
+   (see rectanglesForRange in @codemirror/view). Horizontal padding on
+   `.cm-content` is invisible to that math — which is exactly why the base theme
+   ships `.cm-content { padding: 4px 0 }` with the inset on `.cm-line`.
+   With `padding: 12px` here, the band drawn for the *middle* rows of a
+   multi-line selection started 12px to the left of — and ended 12px to the
+   right of — the bands of the first/last rows, so the highlight looked
+   staircase-misaligned from row to row even though the glyphs lined up.
+   Keeping 12px + the base theme's own `0 2px 0 6px` on `.cm-line` leaves the
+   text (and the wrap width) at exactly the same place as before. */
+.cm-editor .cm-content {
+  padding: 12px 0;
+  caret-color: var(--caret);
+}
+.cm-editor .cm-line {
+  padding: 0 14px 0 18px; /* 12px content inset + the base theme's 2px / 6px */
+  line-height: 1.6;
+}
+.cm-editor .cm-cursor,
+.cm-editor .cm-dropCursor {
+  border-left: 1.2px solid var(--caret);
+}
+.cm-editor .cm-selectionBackground,
+.cm-editor.cm-focused .cm-selectionBackground {
+  background: var(--selection) !important;
+}
+/* `drawSelection()` paints its own selection layer (styled just above), so the
+   browser's native selection MUST stay invisible — otherwise both are drawn and
+   their translucent fills stack into a visibly double-tinted band.
+   CodeMirror ships this rule itself, but style-mod mounts its stylesheet as the
+   FIRST child of <head>, so any stylesheet loaded afterwards wins specificity
+   ties. Our old `.cm-editor .cm-content ::selection` had exactly the same
+   specificity as CodeMirror's `hideNativeSelection` rule (0,2,1) and therefore
+   silently overrode it. Restated here with higher specificity so it no longer
+   depends on stylesheet order. */
+.cm-editor .cm-scroller .cm-content::selection,
+.cm-editor .cm-scroller .cm-content ::selection {
+  background: transparent !important;
+}
+/* No padding-top here: CodeMirror already offsets the first gutter element by
+   the content's padding-top (see documentPadding in @codemirror/view), so
+   adding it again shifts every line number one padding below its line. */
+.cm-editor .cm-gutters {
+  background: var(--gutter-bg);
+  color: var(--gutter-text);
+  border-right: 1px solid var(--line-soft);
+  user-select: none;
+}
+.cm-editor .cm-gutterElement {
+  line-height: 1.6;
+}
+.cm-editor .cm-lineNumbers .cm-gutterElement {
+  min-width: 56px;
+  box-sizing: border-box;
+  padding: 0 12px 0 0;
+  text-align: right;
+}
+.cm-editor .cm-placeholder {
+  color: var(--placeholder);
+}
+
+/* =====================================================================
+   Output panel — the app shell sets `user-select: none` on the root so the
+   chrome behaves like a native window, and the output pane opts back in so run
+   output can be selected and copied.
+   ===================================================================== */
+.output-text::selection,
+.output-text *::selection {
+  background: var(--match-current-bg);
+}
+
+/* =====================================================================
+   Search match highlight (marked by decorations on the CodeMirror document)
+   ===================================================================== */
+.search-match {
+  background: var(--match-bg);
+  border-radius: 2px;
+}
+.search-match-current {
+  background: var(--match-current-bg);
+  border-radius: 2px;
+}
+
+/* =====================================================================
+   Syntax highlighting (Prism token colors, per theme)
+   ===================================================================== */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: var(--tok-comment);
+  font-style: italic;
+}
+.token.punctuation {
+  color: var(--tok-punctuation);
+}
+.token.property,
+.token.tag,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  color: var(--tok-property);
+}
+.token.boolean,
+.token.number {
+  color: var(--tok-boolean);
+}
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: var(--tok-selector);
+}
+.token.operator,
+.token.entity,
+.token.url,
+.token.parameter {
+  color: var(--tok-operator);
+}
+.token.atrule,
+.token.attr-value,
+.token.keyword,
+.token.rule {
+  color: var(--tok-keyword);
+}
+.token.function {
+  color: var(--tok-function);
+}
+.token.class-name,
+.token.type,
+.token.namespace {
+  color: var(--tok-class);
+}
+.token.regex,
+.token.important,
+.token.variable {
+  color: var(--tok-regex);
+}
+.token.important,
+.token.bold {
+  font-weight: bold;
+}
+.token.italic {
+  font-style: italic;
+}
+
+/* Markdown live preview */
+.markdown-body {
+  font-size: 14px;
+  line-height: 1.75;
+  color: var(--ink);
+  word-break: break-word;
+}
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  margin: 1.4em 0 0.6em;
+  line-height: 1.3;
+  font-weight: 700;
+}
+.markdown-body h1 {
+  font-size: 1.7em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--line-soft);
+}
+.markdown-body h2 {
+  font-size: 1.4em;
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--line-soft);
+}
+.markdown-body h3 {
+  font-size: 1.2em;
+}
+.markdown-body h4 {
+  font-size: 1.05em;
+}
+.markdown-body p {
+  margin: 0.7em 0;
+}
+.markdown-body a {
+  color: var(--accent);
+  text-decoration: none;
+}
+.markdown-body a:hover {
+  text-decoration: underline;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.7em 0;
+  padding-left: 1.6em;
+}
+.markdown-body li {
+  margin: 0.25em 0;
+}
+.markdown-body blockquote {
+  margin: 0.8em 0;
+  padding: 0.2em 1em;
+  border-left: 3px solid var(--line);
+  border-radius: 0 6px 6px 0;
+  color: var(--sub);
+  background: var(--panel);
+}
+.markdown-body code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.9em;
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  background: var(--panel);
+}
+.markdown-body pre {
+  margin: 0.8em 0;
+  padding: 0.9em 1em;
+  font-size: 0.88em;
+  line-height: 1.6;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--editor-bg);
+}
+.markdown-body pre code {
+  padding: 0;
+  font-size: inherit;
+  background: transparent;
+}
+.markdown-body img {
+  max-width: 100%;
+  border-radius: 6px;
+}
+.markdown-body hr {
+  margin: 1.2em 0;
+  border: none;
+  border-top: 1px solid var(--line);
+}
+.markdown-body table {
+  width: 100%;
+  margin: 0.8em 0;
+  border-collapse: collapse;
+}
+.markdown-body th,
+.markdown-body td {
+  padding: 0.4em 0.8em;
+  border: 1px solid var(--line);
+}
+.markdown-body th {
+  font-weight: 600;
+  background: var(--panel);
+}
+.markdown-body strong {
+  font-weight: 700;
+}
+.markdown-body del {
+  color: var(--faint);
+}
