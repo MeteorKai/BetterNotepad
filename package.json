@@ -1,14 +1,13 @@
 {
   "name": "betternotepad",
   "private": true,
-  "version": "0.2.5",
+  "version": "0.2.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "latest-json": "node scripts/make-latest-json.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
     "audit:strings": "node scripts/audit-strings.mjs"
   },
@@ -38,8 +37,6 @@
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-fs": "^2",
     "@tauri-apps/plugin-opener": "^2.5.5",
-    "@tauri-apps/plugin-process": "^2.3.1",
-    "@tauri-apps/plugin-updater": "^2.11.0",
     "@types/prismjs": "^1.26.6",
     "dompurify": "^3.4.14",
     "marked": "^18.0.10",

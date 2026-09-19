@@ -29,7 +29,6 @@ import { useTheme } from "./hooks/useTheme";
 import { useEditorSettings } from "./hooks/useEditorSettings";
 import { useMascot } from "./hooks/useMascot";
 import { useRunner } from "./hooks/useRunner";
-import { useUpdater } from "./hooks/useUpdater";
 import { getI18nLocale, resolveLocale, setI18nLocale, t } from "./i18n";
 
 const LANGUAGE_BY_EXT: Record<string, string> = {
@@ -157,13 +156,6 @@ function App() {
   const { theme, cycle: cycleTheme } = useTheme();
   const mascot = useMascot();
   const runner = useRunner();
-  const updater = useUpdater();
-
-  // The Windows updater installer quits the app before installing, so flush the
-  // session first — it keeps unsaved buffers, and those come back on restart.
-  const installUpdate = useCallback(() => {
-    updater.install(persistSessionNow).catch(() => {});
-  }, [updater.install, persistSessionNow]);
 
   const [outputOpen, setOutputOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -174,17 +166,6 @@ function App() {
   useEffect(() => {
     setTypingTick((t) => t + 1);
   }, [activeTab.content]);
-
-  // Startup update check. Delayed so it never races with restoring the session,
-  // and silent so a failure (offline, GitHub down) stays out of the user's way —
-  // a real update shows up as a dot on the About tab in Settings.
-  useEffect(() => {
-    if (!("__TAURI_INTERNALS__" in window)) return;
-    const timer = window.setTimeout(() => {
-      void updater.checkNow(true);
-    }, 5000);
-    return () => window.clearTimeout(timer);
-  }, [updater.checkNow]);
 
   const firstTabIdRef = useRef(activeTab.id);
   const tabsRef = useRef(tabs);
@@ -863,8 +844,6 @@ function App() {
           onApplyDetected={runner.applyDetected}
           editorSettings={editorSettings}
           onSetEditor={setEditorSettings}
-          updater={updater}
-          onInstallUpdate={installUpdate}
           onClose={() => setSettingsOpen(false)}
         />
       )}

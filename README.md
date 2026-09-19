@@ -23,7 +23,7 @@ Windows 安装包即装即用，无需任何配置。
 | 跨文件搜索 | ✗ | ✓ | ✓ 一键搜索整个文件夹 |
 | 文件管理 | ✗ | 需插件 | ✓ 内置文件树，新建/重命名/删除 |
 | 行尾 / 编码切换 | ✗ | ✓ | ✓ LF / CRLF，混合行尾自动修复 |
-| 自动检查更新 | ✗ | ✗ | ✓ 启动静默检查，应用内一键安装 |
+| 检查更新 | ✗ | ✗ | ✓ 应用内一键跳转 GitHub 查看新版本 |
 | 3D 看板娘 | ✗ | ✗ | ✓ 可拖拽互动的可爱看板娘 |
 
 **一句话**：打开即用、界面现代、功能完整的记事本 + 轻量 IDE 合体。
@@ -36,7 +36,7 @@ Windows 安装包即装即用，无需任何配置。
 
 - `BetterNotepad_<版本号>_x64-setup.exe`
 
-双击安装即可。安装后 `.txt` 文件默认关联到 BetterNotepad（若未自动关联，右键文件 → 打开方式 → 选择 BetterNotepad → 始终）。装好之后不必再手动下载新版本，应用会自己检查更新。
+双击安装即可。安装后 `.txt` 文件默认关联到 BetterNotepad（若未自动关联，右键文件 → 打开方式 → 选择 BetterNotepad → 始终）。想升级时在 **设置 → About** 点「检查更新」，会跳到 GitHub 查看新版本。
 
 ---
 
@@ -158,50 +158,28 @@ Windows 11 的默认应用由系统"打开方式"决定：右键文件 → 打�
 
 ---
 
-## 自动更新
+## 版本更新
 
-应用启动几秒后会在后台**静默检查**一次 GitHub Releases —— 检查失败（断网、GitHub 抽风）不会有任何提示，只有真的发现新版本时才会在 **设置 → About** 页签上出现一个小圆点。
+BetterNotepad **不做应用内自动更新**。想升级时：**设置 → About → 检查更新**，会在浏览器中打开项目的 GitHub 页面，那里能看到每个版本的安装包与更新说明，下载新的安装包直接覆盖安装即可（**未保存的内容会自动恢复**）。
 
-手动检查：**设置 → About → Check for updates**。发现新版本会显示版本号与更新说明，点 **Download and install** 直接在应用内下载安装，装完自动重启，**未保存的内容会在重启后恢复**。
-
-更新包使用 ed25519 签名，应用内置公钥校验，签名不匹配的包不会被安装。
+> 早期版本曾内置 Tauri updater（启动静默检查 + 应用内下载安装 + ed25519 签名校验），
+> 但它要求每个安装包都做代码签名并把签名清单上传到 Release，维护成本高于收益，因此已移除。
 
 ---
 
 ## 发版流程（维护者）
 
-客户端依赖三样东西，**必须一起上传到同一个 Release**：安装包、它的 `.sig` 签名、以及 `latest.json`。
-
 1. 改版本号（`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`package.json`、`package-lock.json`），并更新 `更新日志.txt`。
-2. 设置签名密钥 —— **每次构建都需要**。缺了它打包会在最后一步报
-   `A public key has been found, but no private key` 并且不产出 `.sig`：
-   ```powershell
-   $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -Raw "C:\Users\TY\.tauri\betternotepad.key"
-   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<密钥密码>"
-   ```
-   > 注意：打包器只认 `TAURI_SIGNING_PRIVATE_KEY`（**密钥内容**）。`TAURI_SIGNING_PRIVATE_KEY_PATH`
-   > 只对 `tauri signer sign` 生效，别用错。
-   > 密码存在 `C:\Users\TY\.tauri\betternotepad.key.password.txt`。
-3. 打包：
+2. 打包：
    ```powershell
    npm run tauri build
    ```
-   `src-tauri/target/release/bundle/nsis/` 下会多出：
+   `src-tauri/target/release/bundle/nsis/` 下会产出：
    - `BetterNotepad_<版本>_x64-setup.exe`
-   - `BetterNotepad_<版本>_x64-setup.exe.sig`
-4. 生成 `latest.json`：
-   ```powershell
-   npm run latest-json -- --notes "本次更新内容"
-   ```
-5. 在 GitHub 新建 Release，tag 用 `v<版本>`（例：`v0.2.4`），上传上面三个文件。
+3. 在 GitHub 新建 Release，tag 用 `v<版本>`（例：`v0.2.6`），上传上面这个 exe 即可。
 
-两点不能错：
-
-- `latest.json` 这个**文件名不能改** —— 应用请求的是 `releases/latest/download/latest.json`。
-- **版本号必须递增**，否则客户端不会认为存在更新（当前版本号不会更新到相同版本号）。
-
-> 私钥 `C:\Users\TY\.tauri\betternotepad.key` 一旦丢失，就再也无法给**已安装的用户**推送更新 —— 请务必备份。
-> 公钥在 `tauri.conf.json` 的 `plugins.updater.pubkey`，已内置进应用，除非有计划的密钥轮换，否则不要更换。
+> 不需要签名密钥，也不需要 `.sig` / `latest.json` —— 那是 Tauri updater 的三件套，
+> 已随应用内自动更新一起移除。
 
 ---
 

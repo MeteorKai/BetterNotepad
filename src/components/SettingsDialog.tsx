@@ -3,7 +3,6 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { InterpreterConfig } from "../hooks/useRunner";
-import type { Updater } from "../hooks/useUpdater";
 import { t, type LocaleSetting } from "../i18n";
 import {
   FONT_OPTIONS,
@@ -19,8 +18,6 @@ interface SettingsDialogProps {
   onSetEditor: (
     patch: Partial<EditorSettings> | ((prev: EditorSettings) => Partial<EditorSettings>)
   ) => void;
-  updater: Updater;
-  onInstallUpdate: () => void;
   onClose: () => void;
 }
 
@@ -216,29 +213,26 @@ function EditorSettingsPanel({
 const RELEASES_URL = "https://github.com/MeteorKai/BetterNotepad/releases";
 
 function AboutPanel({
-  updater,
-  onInstall,
   locale,
   onSetLocale,
   contextMenu,
   onSetContextMenu,
 }: {
-  updater: Updater;
-  onInstall: () => void;
   locale: LocaleSetting;
   onSetLocale: (locale: LocaleSetting) => void;
   contextMenu: boolean;
   onSetContextMenu: (enabled: boolean) => void;
 }) {
   const [version, setVersion] = useState("");
-  const { status, info, error, progress } = updater;
-  const busy = status === "checking" || status === "downloading" || status === "installing";
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     getVersion().then(setVersion).catch(() => {});
   }, []);
 
+  // There is no in-app updater any more: "check for updates" just hands the
+  // user off to the project's GitHub page, where every release and its notes
+  // live. Same pattern as the homepage button in AboutDialog.
   const openReleases = () => {
     if ("__TAURI_INTERNALS__" in window) {
       openUrl(RELEASES_URL).catch(() => {});
@@ -279,94 +273,17 @@ function AboutPanel({
           {version || t("about.unknownVersion")}
         </span>
       </Row>
-      <Row label={t("about.updates")}>
-        <button
-          onClick={() => updater.checkNow(false)}
-          disabled={busy}
-          className="px-3 py-1 rounded-md text-xs font-medium text-accent-ink bg-accent hover:bg-accent-strong disabled:opacity-50 disabled:cursor-default transition-colors"
-        >
-          {status === "checking" ? t("about.checking") : t("about.check")}
-        </button>
-      </Row>
-
-      <div className="rounded-lg border border-line-soft bg-surface px-3 py-2.5">
-        {status === "idle" && (
-          <p className="text-xs text-faint leading-relaxed">{t("about.idleHint")}</p>
-        )}
-
-        {status === "checking" && <p className="text-xs text-sub">{t("about.contacting")}</p>}
-
-        {status === "latest" && (
-          <p className="text-xs text-sub">
-            {version ? t("about.latestWithVersion", { version }) : t("about.latest")}
-          </p>
-        )}
-
-        {status === "available" && info && (
-          <div className="space-y-2">
-            <p className="text-xs text-ink leading-relaxed">
-              {t("about.available", {
-                version: info.version,
-                date: info.date ? t("about.releasedOn", { date: info.date.slice(0, 10) }) : "",
-                current: info.currentVersion,
-              })}
-            </p>
-            {info.notes.trim() !== "" && (
-              <div className="max-h-32 overflow-y-auto rounded-md border border-line-soft bg-elevated px-2 py-1.5 select-text cursor-text">
-                <pre className="whitespace-pre-wrap break-words font-sans text-[11px] leading-relaxed text-sub">
-                  {info.notes.trim()}
-                </pre>
-              </div>
-            )}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={onInstall}
-                className="px-3 py-1 rounded-md text-xs font-medium text-accent-ink bg-accent hover:bg-accent-strong transition-colors"
-              >
-                {t("about.install")}
-              </button>
-              <span className="text-[11px] text-faint">{t("about.installNote")}</span>
-            </div>
-          </div>
-        )}
-
-        {(status === "downloading" || status === "installing") && (
-          <div className="space-y-2">
-            <p className="text-xs text-sub">
-              {status === "installing"
-                ? t("about.installing")
-                : progress >= 0
-                  ? t("about.downloadingPct", { pct: progress })
-                  : t("about.downloading")}
-            </p>
-            <div className="h-1 overflow-hidden rounded-full bg-hover">
-              <div
-                className="h-full bg-accent transition-[width] duration-200"
-                style={{
-                  width: progress >= 0 ? `${progress}%` : "100%",
-                  opacity: progress >= 0 ? 1 : 0.4,
-                }}
-              />
-            </div>
-          </div>
-        )}
-
-        {status === "error" && (
-          <p className="text-xs text-danger break-words select-text cursor-text">
-            {t("about.failed", { error })}
-          </p>
-        )}
+      <div className="space-y-1.5">
+        <Row label={t("about.updates")}>
+          <button
+            onClick={openReleases}
+            className="px-3 py-1 rounded-md text-xs font-medium text-accent-ink bg-accent hover:bg-accent-strong transition-colors"
+          >
+            {t("about.check")}
+          </button>
+        </Row>
+        <p className="text-[11px] text-faint leading-relaxed">{t("about.checkHint")}</p>
       </div>
-
-      <p className="text-[11px] text-faint leading-relaxed">
-        {t("about.releasesHint")}{" "}
-        <button
-          onClick={openReleases}
-          className="text-accent hover:underline underline-offset-2 transition-colors"
-        >
-          {t("about.viewReleases")}
-        </button>
-      </p>
     </div>
   );
 }
@@ -377,8 +294,6 @@ export default function SettingsDialog({
   onApplyDetected,
   editorSettings,
   onSetEditor,
-  updater,
-  onInstallUpdate,
   onClose,
 }: SettingsDialogProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -451,7 +366,6 @@ export default function SettingsDialog({
             </button>
             <button
               onClick={() => setTab("about")}
-              title={updater.status === "available" ? t("about.tabUpdateAvailable") : undefined}
               className={
                 tab === "about"
                   ? "px-3 py-1 text-sm font-medium accent-chip"
@@ -459,9 +373,6 @@ export default function SettingsDialog({
               }
             >
               {t("settings.tab.general")}
-              {updater.status === "available" && (
-                <span className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-accent align-middle" />
-              )}
             </button>
           </div>
           <button
@@ -485,8 +396,6 @@ export default function SettingsDialog({
             />
           ) : tab === "about" ? (
             <AboutPanel
-              updater={updater}
-              onInstall={onInstallUpdate}
               locale={editorSettings.locale}
               onSetLocale={(locale) => onSetEditor({ locale })}
               contextMenu={editorSettings.contextMenu}
