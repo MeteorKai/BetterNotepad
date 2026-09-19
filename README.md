@@ -162,24 +162,7 @@ Windows 11 的默认应用由系统"打开方式"决定：右键文件 → 打�
 
 BetterNotepad **不做应用内自动更新**。想升级时：**设置 → About → 检查更新**，会在浏览器中打开项目的 GitHub 页面，那里能看到每个版本的安装包与更新说明，下载新的安装包直接覆盖安装即可（**未保存的内容会自动恢复**）。
 
-> 早期版本曾内置 Tauri updater（启动静默检查 + 应用内下载安装 + ed25519 签名校验），
-> 但它要求每个安装包都做代码签名并把签名清单上传到 Release，维护成本高于收益，因此已移除。
 
----
-
-## 发版流程（维护者）
-
-1. 改版本号（`src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`package.json`、`package-lock.json`），并更新 `更新日志.txt`。
-2. 打包：
-   ```powershell
-   npm run tauri build
-   ```
-   `src-tauri/target/release/bundle/nsis/` 下会产出：
-   - `BetterNotepad_<版本>_x64-setup.exe`
-3. 在 GitHub 新建 Release，tag 用 `v<版本>`（例：`v0.2.6`），上传上面这个 exe 即可。
-
-> 不需要签名密钥，也不需要 `.sig` / `latest.json` —— 那是 Tauri updater 的三件套，
-> 已随应用内自动更新一起移除。
 
 ---
 
