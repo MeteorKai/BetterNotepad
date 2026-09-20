@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RunExit, RunLine } from "../hooks/useRunner";
 import EditorContextMenu, { type ContextMenuItem } from "./EditorContextMenu";
+import VerticalResizeHandle from "./VerticalResizeHandle";
 import { copyText } from "../utils/clipboard";
 import { getI18nLocale, t } from "../i18n";
 
@@ -11,6 +12,14 @@ interface OutputPanelProps {
   onClear: () => void;
   onStop: () => void;
   onClose: () => void;
+  /** Panel body height in px, excluding the header. Draggable by the user. */
+  height: number;
+  onResize: (delta: number) => void;
+  /** Sends one line to the running program's stdin. */
+  onSendInput: (text: string) => Promise<boolean>;
+  /** Session-wide input history, shared across runs. */
+  inputHistory: string[];
+  onRememberInput: (text: string) => void;
 }
 
 interface MenuState {
@@ -19,6 +28,11 @@ interface MenuState {
   hasSelection: boolean;
 }
 
+// The header row is `h-9` (36px) and the input row is `h-8` (32px); the body is
+// whatever the user dragged to.
+const HEADER_HEIGHT = 36;
+const INPUT_HEIGHT = 32;
+
 export default function OutputPanel({
   output,
   running,
@@ -26,11 +40,21 @@ export default function OutputPanel({
   onClear,
   onStop,
   onClose,
+  height,
+  onResize,
+  onSendInput,
+  inputHistory,
+  onRememberInput,
 }: OutputPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<number | null>(null);
+  const [draft, setDraft] = useState("");
+  // -1 means "editing a fresh line"; anything >= 0 indexes into inputHistory
+  // from the end, which is the direction ↑ walks.
+  const [historyPos, setHistoryPos] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   // Whether the viewport is pinned to the tail. The app root sets
   // `user-select: none`, so a drag to select output must never have the panel
@@ -54,6 +78,56 @@ export default function OutputPanel({
     if (!el) return;
     stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
   }, []);
+
+  const historyIndex = useCallback(
+    (pos: number) => (pos < 0 ? -1 : inputHistory.length - 1 - pos),
+    [inputHistory.length]
+  );
+
+  const submit = useCallback(async () => {
+    if (!running) return; // Nothing is reading stdin — do not send into the void.
+    // Remember non-empty lines only; re-running the same answer repeatedly
+    // would otherwise bury the useful entries.
+    if (draft.trim().length > 0) onRememberInput(draft);
+    setHistoryPos(-1);
+    const text = draft;
+    setDraft("");
+    await onSendInput(text);
+  }, [draft, running, onSendInput, onRememberInput]);
+
+  const handleHistoryKey = useCallback(
+    (dir: -1 | 1) => {
+      if (inputHistory.length === 0) return;
+      const next = historyPos + (dir === -1 ? 1 : -1);
+      // ↑ walks backwards through history; ↓ walks forward and lands on the
+      // empty draft once past the newest entry.
+      const idx = historyIndex(next);
+      if (next < 0) {
+        setHistoryPos(-1);
+        setDraft("");
+      } else if (idx >= 0 && idx < inputHistory.length) {
+        setHistoryPos(next);
+        setDraft(inputHistory[idx]);
+      }
+    },
+    [historyPos, inputHistory, historyIndex]
+  );
+
+  const handleInputKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLInputElement>) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        void submit();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        handleHistoryKey(-1);
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        handleHistoryKey(1);
+      }
+    },
+    [submit, handleHistoryKey]
+  );
 
   const flashCopied = useCallback(() => {
     setCopied(true);
@@ -147,7 +221,11 @@ export default function OutputPanel({
   );
 
   return (
-    <div className="h-44 shrink-0 bg-panel border-t border-line-soft flex flex-col">
+    <div
+      className="shrink-0 bg-panel border-t border-line-soft flex flex-col"
+      style={{ height: height + HEADER_HEIGHT + INPUT_HEIGHT }}
+    >
+      <VerticalResizeHandle onDrag={onResize} />
       <div className="h-9 flex items-center gap-2 px-3 border-b border-line-soft shrink-0">
         <span className="text-xs font-semibold uppercase tracking-wide text-faint">{t("output.title")}</span>
         {running ? (
@@ -219,6 +297,34 @@ export default function OutputPanel({
             </div>
           ))
         )}
+      </div>
+      {/* stdin row: the whole panel becomes interactive, which is what makes
+          `input()` / `scanf` style programs runnable at all. */}
+      <div className="h-8 shrink-0 flex items-center gap-2 px-3 border-t border-line-soft">
+        <span className={`font-mono text-xs ${running ? "text-accent" : "text-faint"}`}>›</span>
+        <input
+          ref={inputRef}
+          value={draft}
+          onChange={(e) => {
+            setDraft(e.target.value);
+            setHistoryPos(-1);
+          }}
+          onKeyDown={handleInputKeyDown}
+          disabled={!running}
+          spellCheck={false}
+          autoComplete="off"
+          placeholder={running ? t("output.inputPlaceholder") : t("output.inputIdle")}
+          title={running ? t("output.inputTitle") : t("output.inputIdleTitle")}
+          className="flex-1 min-w-0 bg-transparent outline-none font-mono text-xs text-ink placeholder:text-faint disabled:cursor-not-allowed disabled:placeholder:text-faint"
+        />
+        <button
+          onClick={() => void submit()}
+          disabled={!running}
+          title={t("output.sendTitle")}
+          className="px-2 py-0.5 rounded text-xs text-sub hover:text-ink hover:bg-hover transition-colors disabled:opacity-40 disabled:text-faint disabled:hover:bg-transparent"
+        >
+          {t("output.send")}
+        </button>
       </div>
       {menu && (
         <EditorContextMenu

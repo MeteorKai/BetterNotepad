@@ -26,6 +26,7 @@ const en: Dict = {
   "dialog.textFiles": "Text Files",
   "editor.placeholder": "Start typing...",
   "resize.title": "Drag to resize",
+  "resize.heightTitle": "Drag to resize height",
 
   "tab.new": "New tab",
   "tab.newTitle": "New tab (Ctrl+N)",
@@ -121,6 +122,12 @@ const en: Dict = {
   "output.exited": "exited {code}",
   "output.exitCode": "Exited with code {code}",
   "output.workingDir": "Running in: {dir}",
+  "output.inputPlaceholder": "Type a line, press Enter to send…",
+  "output.inputIdle": "Run a program to enable input",
+  "output.inputTitle": "Enter sends this line to the program (↑/↓ for history)",
+  "output.inputIdleTitle": "The program is not running, so it cannot read input",
+  "output.send": "Send",
+  "output.sendTitle": "Send this line to the program's standard input",
 
   "run.desktopOnly": "Running files only works in the desktop app.",
   "run.in": "Running in: {dir}",
@@ -267,6 +274,7 @@ const zh: Dict = {
   "dialog.textFiles": "文本文件",
   "editor.placeholder": "开始输入…",
   "resize.title": "拖动调整宽度",
+  "resize.heightTitle": "拖动调整高度",
 
   "tab.new": "新建标签",
   "tab.newTitle": "新建标签（Ctrl+N）",
@@ -362,6 +370,12 @@ const zh: Dict = {
   "output.exited": "已退出（{code}）",
   "output.exitCode": "退出码 {code}",
   "output.workingDir": "运行目录：{dir}",
+  "output.inputPlaceholder": "输入一行内容，按回车发送…",
+  "output.inputIdle": "运行程序后即可输入",
+  "output.inputTitle": "回车把这一行发送给程序（↑/↓ 翻历史）",
+  "output.inputIdleTitle": "程序未在运行，无法读取输入",
+  "output.send": "发送",
+  "output.sendTitle": "把这一行发送到程序的标准输入",
 
   "run.desktopOnly": "运行功能仅在桌面版应用中可用。",
   "run.in": "运行目录：{dir}",

@@ -310,6 +310,18 @@ function App() {
     }
   }, [editorRatio]);
 
+  const [outputHeight, setOutputHeight] = useState<number>(() => {
+    const n = Number(localStorage.getItem("betternotepad.outputHeight"));
+    return Number.isFinite(n) && n > 0 ? n : 140;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("betternotepad.outputHeight", String(outputHeight));
+    } catch {
+      // ignore
+    }
+  }, [outputHeight]);
+
   const splitRef = useRef<HTMLDivElement>(null);
   const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
   const handleSidebarDrag = useCallback((delta: number) => {
@@ -319,6 +331,41 @@ function App() {
     const w = splitRef.current?.clientWidth || 800;
     setEditorRatio((r) => clamp(r + delta / w, 0.2, 0.8));
   }, []);
+  // Dragging the strip above the output panel: moving the mouse down should
+  // make the panel shorter, so the delta is inverted.
+  const handleOutputDrag = useCallback((delta: number) => {
+    setOutputHeight((h) => clamp(h - delta, 60, 640));
+  }, []);
+
+  // stdin history for the output panel, shared across runs so an answer typed
+  // for one program is still recallable in the next one. Capped because it is
+  // persisted to localStorage.
+  const [inputHistory, setInputHistory] = useState<string[]>(() => {
+    try {
+      const raw = localStorage.getItem("betternotepad.inputHistory");
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
+    } catch {
+      return [];
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("betternotepad.inputHistory", JSON.stringify(inputHistory));
+    } catch {
+      // ignore
+    }
+  }, [inputHistory]);
+  const rememberInput = useCallback((text: string) => {
+    setInputHistory((prev) => {
+      // Consecutive duplicates are noise (holding Enter, retrying the same
+      // answer); keep the list short and useful.
+      if (prev[prev.length - 1] === text) return prev;
+      const next = [...prev, text];
+      return next.length > 100 ? next.slice(next.length - 100) : next;
+    });
+  }, []);
+
   const [wrap, setWrap] = useState<boolean>(() => {
     try {
       return localStorage.getItem("betternotepad.wrap") === "1";
@@ -783,6 +830,11 @@ function App() {
           onClear={runner.clearOutput}
           onStop={runner.stop}
           onClose={() => setOutputOpen(false)}
+          height={outputHeight}
+          onResize={handleOutputDrag}
+          onSendInput={runner.sendInput}
+          inputHistory={inputHistory}
+          onRememberInput={rememberInput}
         />
       )}
       <StatusBar

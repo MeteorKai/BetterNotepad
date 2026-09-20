@@ -188,6 +188,32 @@ export function useRunner() {
     runIdRef.current = null;
   }, []);
 
+  /**
+   * Feed one line to the running program's stdin. The typed text is echoed
+   * back into the panel first, so the transcript reads like a real terminal —
+   * programs never echo what they read from a pipe.
+   */
+  const sendInput = useCallback(async (text: string): Promise<boolean> => {
+    const id = runIdRef.current;
+    if (!id) return false;
+    // Echo even an empty line (Enter on a blank line) so the interaction is
+    // visible in the transcript.
+    setOutput((prev) => [
+      ...prev,
+      { id: "stdin", stream: "stdout", notice: true, line: `> ${text}` },
+    ]);
+    try {
+      await invoke("write_stdin", { id, data: text });
+      return true;
+    } catch (err) {
+      setOutput((prev) => [
+        ...prev,
+        { id: "stdin-err", stream: "stderr", line: String(err) },
+      ]);
+      return false;
+    }
+  }, []);
+
   const clearOutput = useCallback(() => {
     setOutput([]);
     setLastExit(null);
@@ -207,6 +233,7 @@ export function useRunner() {
     lastExit,
     run,
     stop,
+    sendInput,
     clearOutput,
     showLocal,
   };
