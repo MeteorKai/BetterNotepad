@@ -792,6 +792,7 @@ function App() {
                 insertSpaces={editorSettings.insertSpaces}
                 language={detectLanguage(activeTab.fileName)}
                 wrap={wrap}
+                bracketMatching={editorSettings.bracketMatching}
               />
               {isMarkdown && (
                 <button

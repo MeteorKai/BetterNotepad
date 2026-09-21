@@ -169,6 +169,19 @@ function EditorSettingsPanel({
         />
       </Row>
 
+      <div className="pt-3 border-t border-line-soft space-y-1.5">
+        <Row label={t("settings.bracketMatching")}>
+          <Toggle
+            checked={settings.bracketMatching}
+            onChange={(v) => onSet({ bracketMatching: v })}
+            label={t("settings.bracketMatching")}
+          />
+        </Row>
+        <p className="text-[11px] text-faint leading-relaxed">
+          {t("settings.bracketMatching.hint")}
+        </p>
+      </div>
+
       <div className="pt-3 border-t border-line-soft space-y-3">
         <Row label={t("settings.runIn")}>
           <Segmented<RunCwdMode>

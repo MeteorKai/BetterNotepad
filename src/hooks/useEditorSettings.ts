@@ -21,6 +21,11 @@ export interface EditorSettings {
    * Defaults to on, so the entry appears without the user hunting for it.
    */
   contextMenu: boolean;
+  /**
+   * Highlight the bracket pair under the caret and its matching counterpart.
+   * On by default — it is the feature most people expect from a code editor.
+   */
+  bracketMatching: boolean;
 }
 
 export const FONT_OPTIONS: { label: string; value: string }[] = [
@@ -46,6 +51,7 @@ const DEFAULTS: EditorSettings = {
   runCwdCustom: "",
   locale: "system",
   contextMenu: true,
+  bracketMatching: true,
 };
 
 function clampInt(v: unknown, min: number, max: number, fallback: number): number {
@@ -76,6 +82,8 @@ function loadSettings(): EditorSettings {
       // default, which is how the entry gets created for existing installs.
       contextMenu:
         typeof p.contextMenu === "boolean" ? p.contextMenu : DEFAULTS.contextMenu,
+      bracketMatching:
+        typeof p.bracketMatching === "boolean" ? p.bracketMatching : DEFAULTS.bracketMatching,
     };
   } catch {
     return DEFAULTS;

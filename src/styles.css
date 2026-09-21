@@ -60,6 +60,13 @@ body {
   --tok-function: #8fb4f5;
   --tok-class: #e3c98a;
   --tok-regex: #ee8fae;
+  /* Bracket pair at the cursor + its match (soft purple, matches --accent-ink
+     from this theme so it reads as "selected" rather than as another token). */
+  --match-bracket-bg: rgba(169, 159, 240, 0.28);
+  --match-bracket-line: rgba(169, 159, 240, 0.45);
+  /* Unmatched bracket: reads as a warning, so danger rather than accent. */
+  --match-unmatched-bg: rgba(226, 106, 122, 0.26);
+  --match-unmatched-line: rgba(226, 106, 122, 0.45);
 }
 
 [data-theme="light"] {
@@ -106,6 +113,10 @@ body {
   --tok-function: #4a7fd0;
   --tok-class: #a07d2e;
   --tok-regex: #c25b7a;
+  --match-bracket-bg: rgba(143, 127, 224, 0.22);
+  --match-bracket-line: rgba(143, 127, 224, 0.38);
+  --match-unmatched-bg: rgba(214, 76, 96, 0.18);
+  --match-unmatched-line: rgba(214, 76, 96, 0.4);
 }
 
 [data-theme="warm"] {
@@ -152,6 +163,10 @@ body {
   --tok-function: #4674b8;
   --tok-class: #9a7430;
   --tok-regex: #b85e76;
+  --match-bracket-bg: rgba(160, 143, 216, 0.24);
+  --match-bracket-line: rgba(160, 143, 216, 0.4);
+  --match-unmatched-bg: rgba(200, 82, 96, 0.2);
+  --match-unmatched-line: rgba(200, 82, 96, 0.42);
 }
 
 /* Tailwind semantic color utilities (resolve to the runtime CSS vars above) */
@@ -301,6 +316,29 @@ body {
 .output-text::selection,
 .output-text *::selection {
   background: var(--match-current-bg);
+}
+
+/* =====================================================================
+   Bracket pair highlight (CodeMirror's `bracketMatching`)
+   The base theme styles these as `&.cm-focused .cm-matchingBracket`, i.e.
+   `.cm-editor.cm-focused .cm-matchingBracket` — specificity (0,3,0). A plain
+   `.cm-editor .cm-matchingBracket` (0,2,0) would silently LOSE, so the
+   `.cm-focused` class is repeated here to match, then `!important` settles the
+   background against the base theme's own backgroundColor.
+   `outline` rather than a thicker border keeps the glyph from shifting, and the
+   same treatment on `.cm-nonmatchingBracket` doubles as an "unbalanced" hint.
+   ===================================================================== */
+.cm-editor.cm-focused .cm-matchingBracket,
+.cm-editor .cm-matchingBracket {
+  background: var(--match-bracket-bg) !important;
+  outline: 1px solid var(--match-bracket-line);
+  border-radius: 2px;
+}
+.cm-editor.cm-focused .cm-nonmatchingBracket,
+.cm-editor .cm-nonmatchingBracket {
+  background: var(--match-unmatched-bg) !important;
+  outline: 1px solid var(--match-unmatched-line);
+  border-radius: 2px;
 }
 
 /* =====================================================================

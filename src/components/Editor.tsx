@@ -17,6 +17,7 @@ import {
   type Command,
 } from "@codemirror/view";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import { bracketMatching as bracketMatchingExtension } from "@codemirror/language";
 import { defaultKeymap, history, historyKeymap, redo, undo } from "@codemirror/commands";
 import EditorContextMenu from "./EditorContextMenu";
 import { getLanguageLoader } from "../editor/languages";
@@ -70,6 +71,7 @@ const compartments = {
   wrap: new Compartment(),
   language: new Compartment(),
   tabSize: new Compartment(),
+  bracketMatching: new Compartment(),
 };
 
 export interface EditorHandle {
@@ -97,6 +99,7 @@ interface EditorProps {
   insertSpaces: boolean;
   language: string | null;
   wrap: boolean;
+  bracketMatching: boolean;
   tabId: string;
 }
 
@@ -139,7 +142,7 @@ function escapeRegExp(s: string): string {
 const externalSync = Annotation.define<boolean>();
 
 const Editor = forwardRef<EditorHandle, EditorProps>(
-  ({ content, onChange, onCursorChange, onSelectionChange, fontSize, fontFamily, tabWidth, insertSpaces, language, wrap, tabId }, ref) => {
+  ({ content, onChange, onCursorChange, onSelectionChange, fontSize, fontFamily, tabWidth, insertSpaces, language, wrap, bracketMatching, tabId }, ref) => {
     const hostRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const lastEmittedRef = useRef(content);
@@ -215,6 +218,17 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
                 history({ newGroupDelay: 0 }),
                 drawSelection(),
                 closeBrackets(),
+                compartments.bracketMatching.of(
+                  bracketMatching
+                    ? [
+                        bracketMatchingExtension({
+                          brackets: "()[]{}",
+                          maxScanDistance: 1e4,
+                          afterCursor: true,
+                        }),
+                      ]
+                    : []
+                ),
                 EditorView.contentAttributes.of({
                   spellcheck: "false",
                   autocorrect: "off",
@@ -307,9 +321,20 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
         effects: [
           compartments.wrap.reconfigure(wrap ? [EditorView.lineWrapping] : []),
           compartments.tabSize.reconfigure(EditorState.tabSize.of(tabWidth)),
+          compartments.bracketMatching.reconfigure(
+            bracketMatching
+              ? [
+                  bracketMatchingExtension({
+                    brackets: "()[]{}",
+                    maxScanDistance: 1e4,
+                    afterCursor: true,
+                  }),
+                ]
+              : []
+          ),
         ],
       });
-    }, [wrap, tabWidth, compartments]);
+    }, [wrap, tabWidth, bracketMatching, compartments]);
 
     useEffect(() => {
       const view = viewRef.current;

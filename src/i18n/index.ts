@@ -215,6 +215,9 @@ const en: Dict = {
   "settings.defaultEol": "Default line ending",
   "settings.font": "Font",
   "settings.fontSize": "Font size",
+  "settings.bracketMatching": "Highlight matching brackets",
+  "settings.bracketMatching.hint":
+    "When the caret sits next to a bracket, that bracket and its counterpart are highlighted together. Unmatched brackets are marked in red.",
   "settings.runIn": "Run in",
   "settings.runIn.folder": "Open folder",
   "settings.runIn.script": "Script folder",
@@ -463,6 +466,9 @@ const zh: Dict = {
   "settings.defaultEol": "默认行尾",
   "settings.font": "字体",
   "settings.fontSize": "字号",
+  "settings.bracketMatching": "高亮匹配的括号",
+  "settings.bracketMatching.hint":
+    "光标停在括号旁边时，这个括号和与之配对的那个会一起高亮。找不到配对的括号会用红色标出。",
   "settings.runIn": "运行目录",
   "settings.runIn.folder": "打开文件夹",
   "settings.runIn.script": "脚本所在目录",
