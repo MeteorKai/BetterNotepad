@@ -1,6 +1,6 @@
 [package]
 name = "notepad-app"
-version = "0.3.4"
+version = "0.3.3"
 description = "A beautiful notepad application"
 authors = ["you"]
 edition = "2021"
