@@ -182,6 +182,19 @@ function EditorSettingsPanel({
         </p>
       </div>
 
+      <div className="pt-3 border-t border-line-soft space-y-1.5">
+        <Row label={t("settings.terminal")}>
+          <Toggle
+            checked={settings.terminalMode}
+            onChange={(v) => onSet({ terminalMode: v })}
+            label={t("settings.terminal")}
+          />
+        </Row>
+        <p className="text-[11px] text-faint leading-relaxed">
+          {t("settings.terminal.hint")}
+        </p>
+      </div>
+
       <div className="pt-3 border-t border-line-soft space-y-3">
         <Row label={t("settings.runIn")}>
           <Segmented<RunCwdMode>

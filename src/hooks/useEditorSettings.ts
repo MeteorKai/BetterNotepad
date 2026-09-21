@@ -26,6 +26,14 @@ export interface EditorSettings {
    * On by default — it is the feature most people expect from a code editor.
    */
   bracketMatching: boolean;
+  /**
+   * Run programmes inside a pseudo-terminal and render the output with
+   * xterm.js instead of the plain text panel.
+   *
+   * On by default. Off falls back to the piped reader, which is what an
+   * escape-code-mangling script may need.
+   */
+  terminalMode: boolean;
 }
 
 export const FONT_OPTIONS: { label: string; value: string }[] = [
@@ -52,6 +60,7 @@ const DEFAULTS: EditorSettings = {
   locale: "system",
   contextMenu: true,
   bracketMatching: true,
+  terminalMode: true,
 };
 
 function clampInt(v: unknown, min: number, max: number, fallback: number): number {
@@ -84,6 +93,8 @@ function loadSettings(): EditorSettings {
         typeof p.contextMenu === "boolean" ? p.contextMenu : DEFAULTS.contextMenu,
       bracketMatching:
         typeof p.bracketMatching === "boolean" ? p.bracketMatching : DEFAULTS.bracketMatching,
+      terminalMode:
+        typeof p.terminalMode === "boolean" ? p.terminalMode : DEFAULTS.terminalMode,
     };
   } catch {
     return DEFAULTS;

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { t } from "../i18n";
 
@@ -24,9 +24,32 @@ export interface RunExit {
   code: number | null;
 }
 
+/**
+ * One message from the PTY backend. `data` is a raw terminal byte stream —
+ * escape sequences, carriage returns and all — which is what makes progress
+ * bars and colours work; `exit` carries the final status instead.
+ */
+interface PtyChunk {
+  kind: "data" | "exit";
+  data: number[];
+  code: number | null;
+}
+
+/** Byte stream and lifecycle control for the terminal renderer. */
+export interface TerminalSink {
+  write: (data: Uint8Array) => void;
+  clear: () => void;
+  focus: () => void;
+  refit: () => void;
+}
+
 const CONFIG_KEY = "betternotepad.interpreters";
 const OUT_EVENT = "run://output";
 const EXIT_EVENT = "run://exit";
+
+/** Fallback geometry; the real value arrives from the fit addon on mount. */
+const DEFAULT_COLS = 80;
+const DEFAULT_ROWS = 24;
 
 function loadConfig(): InterpreterConfig[] {
   try {
@@ -47,6 +70,13 @@ export function useRunner() {
   const [running, setRunning] = useState(false);
   const [lastExit, setLastExit] = useState<RunExit | null>(null);
   const runIdRef = useRef<string | null>(null);
+  // Non-null while a PTY session owns the current run, which is also how the
+  // renderer knows to show the terminal instead of the text panel.
+  const terminalIdRef = useRef<string | null>(null);
+  const sinkRef = useRef<TerminalSink | null>(null);
+  // Size of the terminal viewport, kept current by the fit addon so a session
+  // opened after a panel resize starts life at the right width.
+  const sizeRef = useRef({ cols: DEFAULT_COLS, rows: DEFAULT_ROWS });
 
   useEffect(() => {
     try {
@@ -121,23 +151,93 @@ export function useRunner() {
     applyDetected();
   }, [applyDetected]);
 
+  /**
+   * Tear down the current PTY session, if any. Safe to call when nothing is
+   * running; the backend treats an unknown id as a no-op.
+   */
+  const closeTerminal = useCallback(async () => {
+    const id = terminalIdRef.current;
+    terminalIdRef.current = null;
+    if (!id) return;
+    try {
+      await invoke("pty_close", { id });
+    } catch {
+      /* already gone */
+    }
+  }, []);
+
   const run = useCallback(
     async (
       command: string,
       argsTemplate: string[],
       filePath: string,
       cwd?: string | null,
-      hint?: string | null
+      hint?: string | null,
+      terminal = false
     ): Promise<boolean> => {
       if (!("__TAURI_INTERNALS__" in window)) {
         setOutput([{ id: "local", stream: "stderr", line: t("run.desktopOnly") }]);
         return false;
       }
+
       const hasPlaceholder = argsTemplate.some((a) => a.includes("{file}"));
       const args = argsTemplate.map((a) => a.replaceAll("{file}", filePath));
       if (!hasPlaceholder) args.push(filePath);
 
       const dir = cwd?.trim() || null;
+      const id = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      runIdRef.current = id;
+      setLastExit(null);
+
+      // A previous session's job object still owns its process tree; release it
+      // before starting the next run.
+      await closeTerminal();
+
+      if (terminal) {
+        const header = dir ? t("run.in", { dir }) : t("run.inAppDir");
+        const sink = sinkRef.current;
+        sink?.clear();
+        // The banner goes through the terminal so it scrolls with the output
+        // instead of sitting in a separate header the user cannot copy.
+        sink?.write(
+          new TextEncoder().encode(
+            `\x1b[2m${header}\x1b[0m\r\n` + (hint ? `\x1b[2m${hint}\x1b[0m\r\n` : "")
+          )
+        );
+        setOutput([]);
+        setRunning(true);
+        terminalIdRef.current = id;
+        const { cols, rows } = sizeRef.current;
+        const channel = new Channel<PtyChunk>();
+        channel.onmessage = (msg) => {
+          // A closing session can still have chunks in flight. Dropping them
+          // matters because a stale chunk would otherwise be rendered as if it
+          // belonged to whatever is on screen now.
+          if (terminalIdRef.current !== id) return;
+          if (msg.kind === "exit") {
+            terminalIdRef.current = null;
+            runIdRef.current = null;
+            setRunning(false);
+            setLastExit({ id, code: msg.code });
+            return;
+          }
+          sinkRef.current?.write(new Uint8Array(msg.data));
+        };
+        try {
+          await invoke("pty_open", { id, command, args, cwd: dir, cols, rows, onData: channel });
+          return true;
+        } catch (err) {
+          console.error("Failed to open terminal:", err);
+          terminalIdRef.current = null;
+          runIdRef.current = null;
+          setRunning(false);
+          sinkRef.current?.write(
+            new TextEncoder().encode(`\x1b[31m${String(err)}\x1b[0m\r\n`)
+          );
+          return false;
+        }
+      }
+
       const header: RunLine[] = [
         // Tell the user where the script will resolve relative paths. Without
         // this, a script writing "data.txt" appears to work while the file
@@ -153,9 +253,6 @@ export function useRunner() {
         header.push({ id: "cwd-hint", stream: "stderr", notice: true, line: hint });
       }
       setOutput(header);
-      setLastExit(null);
-      const id = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
-      runIdRef.current = id;
       setRunning(true);
       try {
         // The working directory is decided by the caller and validated on the
@@ -173,10 +270,24 @@ export function useRunner() {
         return false;
       }
     },
-    []
+    [closeTerminal]
   );
 
   const stop = useCallback(async () => {
+    const termId = terminalIdRef.current;
+    if (termId) {
+      terminalIdRef.current = null;
+      try {
+        // Closing the session drops its job object, which is what kills the
+        // whole process tree rather than just the interpreter.
+        await invoke("pty_close", { id: termId });
+      } catch {
+        /* ignore */
+      }
+      runIdRef.current = null;
+      setRunning(false);
+      return;
+    }
     if (runIdRef.current) {
       try {
         await invoke("stop_program", { id: runIdRef.current });
@@ -189,11 +300,24 @@ export function useRunner() {
   }, []);
 
   /**
-   * Feed one line to the running program's stdin. The typed text is echoed
-   * back into the panel first, so the transcript reads like a real terminal —
-   * programs never echo what they read from a pipe.
+   * Feed one line to the running program's stdin. In terminal mode the bytes
+   * go straight to the PTY, which echoes them itself — echoing here as well
+   * would show every keystroke twice. The plain-text mode still has to echo,
+   * because a program reading from a pipe never writes back what it read.
    */
   const sendInput = useCallback(async (text: string): Promise<boolean> => {
+    const termId = terminalIdRef.current;
+    if (termId) {
+      try {
+        await invoke("pty_write", { id: termId, data: text + "\n" });
+        return true;
+      } catch (err) {
+        sinkRef.current?.write(
+          new TextEncoder().encode(`\x1b[31m${String(err)}\x1b[0m\r\n`)
+        );
+        return false;
+      }
+    }
     const id = runIdRef.current;
     if (!id) return false;
     // Echo even an empty line (Enter on a blank line) so the interaction is
@@ -214,12 +338,90 @@ export function useRunner() {
     }
   }, []);
 
+  /**
+   * Send raw terminal input (keystrokes, arrow keys, Ctrl+C). Used by the
+   * terminal renderer so interactive TUI programs work; the text panel's
+   * input row keeps using `sendInput`, which appends the newline for it.
+   */
+  const sendRawInput = useCallback(async (data: string): Promise<boolean> => {
+    const termId = terminalIdRef.current;
+    if (!termId) return false;
+    try {
+      await invoke("pty_write", { id: termId, data });
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  /** Register the terminal renderer. Returns an unregister callback. */
+  const attachTerminal = useCallback((sink: TerminalSink | null) => {
+    sinkRef.current = sink;
+  }, []);
+
+  /**
+   * Report the terminal's current geometry. Remembered even while idle so the
+   * next session opens at the right size, and forwarded live so the running
+   * program can reflow (e.g. a progress bar that redraws to the new width).
+   */
+  const resizeTerminal = useCallback((cols: number, rows: number) => {
+    if (cols <= 0 || rows <= 0) return;
+    const prev = sizeRef.current;
+    if (prev.cols === cols && prev.rows === rows) return;
+    sizeRef.current = { cols, rows };
+    const id = terminalIdRef.current;
+    if (!id) return;
+    void invoke("pty_resize", { id, cols, rows }).catch(() => {
+      /* session went away */
+    });
+  }, []);
+
+  /**
+   * Append lines produced by the terminal bridge. Consecutive fragments join
+   * onto the previous entry rather than starting a new row, so a write that
+   * happens to split mid-line still reads as one line.
+   */
+  const appendLines = useCallback((lines: string[]) => {
+    if (lines.length === 0) return;
+    setOutput((prev) => {
+      const next = [...prev];
+      for (const line of lines) {
+        const last = next[next.length - 1];
+        if (last && last.id === "stream") {
+          next[next.length - 1] = { ...last, line: last.line + line };
+        } else {
+          next.push({ id: "stream", stream: "stdout", line });
+        }
+      }
+      return next;
+    });
+  }, []);
+
+  /**
+   * Replace the text transcript wholesale. Used when the terminal hands its
+   * scrollback over: the snapshot already contains everything the session has
+   * printed, so replacing (rather than appending) keeps repeated switches
+   * between the two views from duplicating the output.
+   */
+  const setTranscript = useCallback((lines: string[]) => {
+    setOutput(
+      lines.map((line) => ({ id: "stream", stream: "stdout" as const, line }))
+    );
+  }, []);
+
   const clearOutput = useCallback(() => {
     setOutput([]);
     setLastExit(null);
+    // Only wipe the scrollback when there is a terminal to wipe; clearing it
+    // mid-run would destroy the record of what the program has printed.
+    if (!terminalIdRef.current) sinkRef.current?.clear();
   }, []);
 
   const showLocal = useCallback((line: string) => {
+    if (terminalIdRef.current) {
+      sinkRef.current?.write(new TextEncoder().encode(`\x1b[2m${line}\x1b[0m\r\n`));
+      return;
+    }
     setOutput([{ id: "local", stream: "stderr", line }]);
     setLastExit(null);
   }, []);
@@ -234,6 +436,11 @@ export function useRunner() {
     run,
     stop,
     sendInput,
+    sendRawInput,
+    attachTerminal,
+    resizeTerminal,
+    appendLines,
+    setTranscript,
     clearOutput,
     showLocal,
   };

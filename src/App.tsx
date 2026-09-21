@@ -484,8 +484,8 @@ function App() {
     }
     setOutputOpen(true);
     const { dir, hint } = resolveRunCwd(filePath);
-    await runner.run(conf.command, conf.args, filePath, dir, hint);
-  }, [runner, activeTab, saveTabData, resolveRunCwd]);
+    await runner.run(conf.command, conf.args, filePath, dir, hint, editorSettings.terminalMode);
+  }, [runner, activeTab, saveTabData, resolveRunCwd, editorSettings.terminalMode]);
 
   const handleOpenSearchResult = useCallback((path: string, line: number) => {
     revealLineRef.current = { path, line };
@@ -834,6 +834,15 @@ function App() {
           height={outputHeight}
           onResize={handleOutputDrag}
           onSendInput={runner.sendInput}
+          onSendRawInput={runner.sendRawInput}
+          onAttachTerminal={runner.attachTerminal}
+          onTerminalResize={runner.resizeTerminal}
+          onAppendLines={runner.appendLines}
+          onSetTranscript={runner.setTranscript}
+          terminalMode={editorSettings.terminalMode}
+          onSetTerminalMode={(terminalMode) => setEditorSettings({ terminalMode })}
+          fontSize={editorSettings.fontSize}
+          fontFamily={editorSettings.fontFamily}
           inputHistory={inputHistory}
           onRememberInput={rememberInput}
         />

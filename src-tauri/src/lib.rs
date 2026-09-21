@@ -1,4 +1,5 @@
 mod commands;
+mod pty;
 mod shell_menu;
 
 use tauri::{Emitter, Manager};
@@ -38,6 +39,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(commands::RunState::default())
+        .manage(commands::StdinState::default())
+        .manage(pty::PtyState::default())
         .invoke_handler(tauri::generate_handler![
             commands::read_file,
             commands::write_file,
@@ -52,11 +55,24 @@ pub fn run() {
             commands::detect_interpreters,
             commands::run_program,
             commands::stop_program,
+            commands::write_stdin,
             commands::search_in_files,
+            pty::pty_open,
+            pty::pty_write,
+            pty::pty_resize,
+            pty::pty_close,
             shell_menu::context_menu_enabled,
             shell_menu::context_menu_command,
             shell_menu::set_context_menu,
         ])
+        .on_window_event(|window, event| {
+            // Tear down terminal sessions before the process goes away. Dropping
+            // each session's job object is what stops a script's own children
+            // from surviving BetterNotepad (see `pty.rs`, hazard 2).
+            if let tauri::WindowEvent::Destroyed = event {
+                pty::close_all(&window.app_handle().clone());
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

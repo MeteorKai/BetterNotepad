@@ -1,10 +1,10 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::sync::Mutex;
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -272,6 +272,31 @@ pub fn create_folder(parent: String, name: String) -> Result<String, String> {
 #[derive(Default)]
 pub struct RunState(pub Mutex<HashMap<String, Child>>);
 
+// stdin is kept apart from the `Child` because the child handle is moved into
+// `RunState` while the stdout/stderr reader threads run: whoever holds the
+// write end drives the program, so it must outlive the spawn call and stay
+// reachable from a Tauri command. Every write is flushed immediately —
+// `input()` blocks on the line, so buffering it would deadlock the script.
+#[derive(Default)]
+pub struct StdinState(pub Mutex<HashMap<String, Arc<Mutex<ChildStdin>>>>);
+
+fn write_line(stdin: &Arc<Mutex<ChildStdin>>, data: &str) -> Result<(), String> {
+    let mut guard = stdin
+        .lock()
+        .map_err(|_| "Standard input is no longer available".to_string())?;
+    // A bare "\n" is the Enter key on an empty line — do not append a second
+    // newline, and do not swallow an intentional trailing one.
+    let payload = if data.ends_with('\n') {
+        data.to_string()
+    } else {
+        format!("{}\n", data)
+    };
+    guard
+        .write_all(payload.as_bytes())
+        .and_then(|_| guard.flush())
+        .map_err(|e| format!("Failed to write to standard input: {}", e))
+}
+
 #[derive(Clone, Serialize)]
 pub struct InterpreterInfo {
     pub language: String,
@@ -379,6 +404,7 @@ pub fn run_program(
 
     let mut cmd = build_command(&command);
     cmd.args(&args)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -393,6 +419,7 @@ pub fn run_program(
         .spawn()
         .map_err(|e| format!("Failed to start {}: {}", command, e))?;
 
+    let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
@@ -403,6 +430,12 @@ pub fn run_program(
             return Err("A process with this id is already running".into());
         }
         map.insert(id.clone(), child);
+    }
+
+    if let Some(stdin) = stdin {
+        let state = app.state::<StdinState>();
+        let mut map = state.0.lock().unwrap();
+        map.insert(id.clone(), Arc::new(Mutex::new(stdin)));
     }
 
     if let Some(out) = stdout {
@@ -453,6 +486,11 @@ pub fn run_program(
                     let code = status.code();
                     map.remove(&id);
                     drop(map);
+                    // Drop the write end too, otherwise the handle keeps the
+                    // pipe alive for the rest of the session.
+                    if let Ok(mut stdin_map) = app2.state::<StdinState>().0.lock() {
+                        stdin_map.remove(&id);
+                    }
                     let _ = app2.emit(
                         "run://exit",
                         RunExit {
@@ -468,6 +506,10 @@ pub fn run_program(
                 }
                 Err(_) => {
                     map.remove(&id);
+                    drop(map);
+                    if let Ok(mut stdin_map) = app2.state::<StdinState>().0.lock() {
+                        stdin_map.remove(&id);
+                    }
                     break;
                 }
             },
@@ -489,6 +531,9 @@ pub fn stop_program(app: AppHandle, id: String) -> Result<(), String> {
             map.remove(&id);
         }
     }
+    if let Ok(mut stdin_map) = app.state::<StdinState>().0.lock() {
+        stdin_map.remove(&id);
+    }
     let _ = app.emit(
         "run://exit",
         RunExit {
@@ -497,6 +542,25 @@ pub fn stop_program(app: AppHandle, id: String) -> Result<(), String> {
         },
     );
     Ok(())
+}
+
+// Feed one line to a running program's standard input. This is what makes
+// `input()` / `scanf` / `readline` usable: without a connected stdin the child
+// inherits an invalid handle and dies with EOFError on its first read.
+#[tauri::command]
+pub fn write_stdin(app: AppHandle, id: String, data: String) -> Result<(), String> {
+    let state = app.state::<StdinState>();
+    let handle = {
+        let map = state
+            .0
+            .lock()
+            .map_err(|_| "Standard input is no longer available".to_string())?;
+        map.get(&id).cloned()
+    };
+    match handle {
+        Some(stdin) => write_line(&stdin, &data),
+        None => Err("The program is not waiting for input".into()),
+    }
 }
 
 // =====================================================================

@@ -128,6 +128,12 @@ const en: Dict = {
   "output.inputIdleTitle": "The program is not running, so it cannot read input",
   "output.send": "Send",
   "output.sendTitle": "Send this line to the program's standard input",
+  "output.terminal.on": "Terminal: on",
+  "output.terminal.off": "Terminal: off",
+  "output.terminal.onTitle":
+    "Output is a real terminal: live streaming, colours, progress bars and keyboard interaction",
+  "output.terminal.offTitle":
+    "Output is plain text. Switch the terminal back on for colours and live progress bars",
 
   "run.desktopOnly": "Running files only works in the desktop app.",
   "run.in": "Running in: {dir}",
@@ -224,6 +230,9 @@ const en: Dict = {
   "settings.runIn.custom": "Custom",
   "settings.runIn.customPlaceholder": "Working directory for run programmes",
   "settings.runIn.browse": "Browse for directory",
+  "settings.terminal": "Terminal output",
+  "settings.terminal.hint":
+    "Runs programmes in a real terminal instead of a plain pipe. Output streams line by line as it is produced, and ANSI colours, progress bars and keyboard prompts (e.g. tqdm, rich) work the way they do in a terminal window. Turn this off if a script prints raw escape codes that look wrong here.",
   "settings.runIn.hintLead": "Working directory handed to scripts you run, so relative paths like ",
   "settings.runIn.hintTail":
     " resolve predictably. Falls back to the script's own folder when the chosen directory is unavailable.",
@@ -379,6 +388,10 @@ const zh: Dict = {
   "output.inputIdleTitle": "程序未在运行，无法读取输入",
   "output.send": "发送",
   "output.sendTitle": "把这一行发送到程序的标准输入",
+  "output.terminal.on": "终端：开",
+  "output.terminal.off": "终端：关",
+  "output.terminal.onTitle": "输出走真实终端：实时流式、彩色、进度条、可键盘交互",
+  "output.terminal.offTitle": "输出为纯文本。重新打开终端可看到颜色与实时进度条",
 
   "run.desktopOnly": "运行功能仅在桌面版应用中可用。",
   "run.in": "运行目录：{dir}",
@@ -475,6 +488,9 @@ const zh: Dict = {
   "settings.runIn.custom": "自定义目录",
   "settings.runIn.customPlaceholder": "运行程序时使用的工作目录",
   "settings.runIn.browse": "选择目录",
+  "settings.terminal": "终端输出",
+  "settings.terminal.hint":
+    "在真实终端里运行程序，而不是普通管道。输出会边产生边逐行显示，ANSI 颜色、进度条以及需要键盘输入的程序（如 tqdm、rich）都和终端窗口里表现一致。若某个脚本在这里显示成乱码转义字符，可以关掉这个开关。",
   "settings.runIn.hintLead": "运行脚本时使用的工作目录，让 ",
   "settings.runIn.hintTail": " 这类相对路径有确定的解析位置。若所选目录不可用，会回退到脚本自身所在目录。",
 
