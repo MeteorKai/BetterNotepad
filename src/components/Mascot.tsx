@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
-import type { MascotPos } from "../hooks/useMascot";
+import { MASCOT_H, MASCOT_W, type MascotPos } from "../hooks/useMascot";
 import { t } from "../i18n";
 
 interface MascotProps {
@@ -9,9 +9,6 @@ interface MascotProps {
   onSavePos: (p: MascotPos) => void;
   onHide: () => void;
 }
-
-const MASCOT_W = 150;
-const MASCOT_H = 190;
 
 // Built per call rather than once at module load, so the lines follow the
 // language picked in Settings.
