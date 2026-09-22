@@ -107,10 +107,7 @@ const en: Dict = {
   "globalSearch.close": "Close",
 
   "output.title": "Output",
-  "output.copy": "Copy",
-  "output.copied": "Copied",
   "output.copyAll": "Copy All",
-  "output.copyAllTitle": "Copy all output",
   "output.selectAll": "Select All",
   "output.clear": "Clear",
   "output.stop": "Stop",
@@ -367,10 +364,7 @@ const zh: Dict = {
   "globalSearch.close": "关闭",
 
   "output.title": "输出",
-  "output.copy": "复制",
-  "output.copied": "已复制",
   "output.copyAll": "复制全部",
-  "output.copyAllTitle": "复制全部输出",
   "output.selectAll": "全选",
   "output.clear": "清空",
   "output.stop": "停止",

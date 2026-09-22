@@ -29,12 +29,22 @@
 //!    `cmd.current_directory()` straight to `CreateProcessW`, which mishandles
 //!    forward slashes and fails the spawn outright. We normalise before handing
 //!    the path over.
+//!
+//! 4. **The console comes up on the OEM code page.** Anything a child writes as
+//!    UTF-8 through the console's ANSI path — PHP's extension warnings, for
+//!    instance — is decoded as GBK by conhost and arrives as mojibake. We put
+//!    the pseudo-console on UTF-8 before starting the program; see
+//!    [`prime_utf8_console`] for why that has to happen on the console itself
+//!    rather than by wrapping the command in a shell.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
+#[cfg(windows)]
+use portable_pty::SlavePty;
 use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
@@ -113,6 +123,52 @@ fn normalize_cwd(dir: &str) -> String {
 #[cfg(not(windows))]
 fn normalize_cwd(dir: &str) -> String {
     dir.to_string()
+}
+
+/// Put the pseudo-console on the UTF-8 code page before the real program starts.
+///
+/// ConPTY gives the console the system OEM code page — 936 on a Chinese Windows
+/// — while conhost itself talks UTF-8. Interpreters that report errors through
+/// the console's ANSI path write UTF-8 into that 936 console, so conhost decodes
+/// their bytes as GBK and the message comes out as garbage: PHP's
+/// `找不到指定的模块。` arrives as `鎵句笉鍒版寚瀹氱殑妯″潡銆?`. Measured, not guessed —
+/// see the probe notes in `.workbuddy/memory/`.
+///
+/// The code page is console state rather than per-process state, so setting it
+/// once here covers every child that later runs on this pseudo-console. Setting
+/// it with a throwaway `cmd /c chcp` — rather than wrapping the user's command
+/// line in a shell — keeps the process we actually launch, its arguments and its
+/// exit code exactly as they were; `cmd` has exited long before the program
+/// starts. It also puts the console's *input* code page on UTF-8, which is what
+/// makes pasted non-ASCII input reach the child as UTF-8.
+///
+/// Best effort: if `cmd` is missing or wedges we keep the default code page and
+/// carry on, so a missing shell can never block "run".
+#[cfg(windows)]
+fn prime_utf8_console(slave: &Box<dyn SlavePty + Send>) {
+    let mut builder = CommandBuilder::new("cmd.exe");
+    // `>nul` keeps "Active code page: 65001" out of the terminal.
+    builder.args(["/c", "chcp 65001>nul"]);
+
+    let Ok(mut child) = slave.spawn_command(builder) else {
+        return;
+    };
+
+    // Bounded wait: `chcp` returns in milliseconds, but a wedged cmd must not
+    // hold up the run.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            Err(_) => break,
+        }
+    }
+
+    // Let conhost settle. cmd has to be gone before the real child starts so the
+    // terminal is not left with cmd's screen-clearing redraw as the newest
+    // output.
+    std::thread::sleep(Duration::from_millis(60));
 }
 
 // ---------------------------------------------------------------------------
@@ -266,6 +322,12 @@ pub fn pty_open(
     if let Some(dir) = dir {
         builder.cwd(normalize_cwd(dir));
     }
+
+    // Hazard 4: the console starts on the OEM code page, which mangles anything
+    // a child writes as UTF-8 through the console's ANSI path. Set it to UTF-8
+    // first, on this same pseudo-console, so the child below inherits it.
+    #[cfg(windows)]
+    prime_utf8_console(&pair.slave);
 
     let child = pair
         .slave

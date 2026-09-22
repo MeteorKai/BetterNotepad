@@ -132,6 +132,10 @@ const BLOCK_COMMENT_BY_LANG: Record<string, [string, string]> = {
   css: ["/*", "*/"],
 };
 
+// Openers whose matching closer is pushed onto its own line when Enter is
+// pressed between the two (see `insertNewlineIndent`).
+const BRACKET_PAIRS: Record<string, string> = { "{": "}", "[": "]", "(": ")" };
+
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -343,13 +347,37 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
 
     // Enter carries over the current line's indentation, deepening one level
     // after an unclosed `{`, `[`, `(`, or `:`.
+    // When the caret sits between a bracket and its matching closer (the pair
+    // closeBrackets just inserted), the closer is pushed onto a line of its own
+    // so the caret ends up on a ready-made indented line inside the block.
     const insertNewlineIndent: Command = (view) => {
       const { state } = view;
       const { from, to } = state.selection.main;
       const line = state.doc.lineAt(from);
       const linePrefix = state.sliceDoc(line.from, from);
       const baseIndent = linePrefix.match(/^[ \t]*/)?.[0] ?? "";
-      const extra = /[{(:[]\s*$/.test(linePrefix) ? indentUnitRef.current : "";
+      const unit = indentUnitRef.current;
+
+      // `{|}` / `[|]` / `(|)`  ->  three lines:
+      //   {
+      //       |          <- caret
+      //   }
+      if (from === to) {
+        const opener = /[{\[(]$/.exec(linePrefix)?.[0] ?? "";
+        const closer = BRACKET_PAIRS[opener];
+        if (closer && state.sliceDoc(from, from + 1) === closer) {
+          const innerIndent = baseIndent + unit;
+          view.dispatch({
+            changes: { from, to, insert: "\n" + innerIndent + "\n" + baseIndent },
+            selection: { anchor: from + 1 + innerIndent.length },
+            userEvent: "input",
+            scrollIntoView: true,
+          });
+          return true;
+        }
+      }
+
+      const extra = /[{(:[]\s*$/.test(linePrefix) ? unit : "";
       const newIndent = baseIndent + extra;
       view.dispatch({
         changes: { from, to, insert: "\n" + newIndent },

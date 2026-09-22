@@ -6,6 +6,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import { invoke } from "@tauri-apps/api/core";
 import "@xterm/xterm/css/xterm.css";
+import { copyText } from "../utils/clipboard";
 
 /**
  * Reads the app's CSS custom properties and maps them onto xterm's palette.
@@ -80,8 +81,8 @@ export interface TerminalHandle {
  * editor is fine because CodeMirror stops propagation, but a terminal is not
  * an input element, so without this a program would never see the letters.
  * Only the *plain* forms are swallowed; `Ctrl`/`Alt` combinations keep
- * working, which leaves Ctrl+C available as "copy" when a selection exists
- * (xterm handles that case itself) and as SIGINT otherwise.
+ * working, which is what leaves `Ctrl+C` free to mean "copy the selection when
+ * there is one, otherwise SIGINT" (see the copy branch below).
  */
 const CAPTURED_PLAIN_KEYS = new Set([
   " ",
@@ -179,6 +180,18 @@ export default function TerminalOutput({
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
       if (!(e.ctrlKey || e.metaKey)) return true;
+
+      // Copy the terminal's own selection. xterm paints into a canvas, so there
+      // is no DOM selection for the browser — or for the panel's own Ctrl+C
+      // handler — to reach. With nothing selected the key must keep reaching the
+      // program as SIGINT (^C), hence the `hasSelection()` test instead of
+      // binding the chord outright. Returning false keeps xterm from encoding
+      // `\x03`, exactly as the zoom branch below does.
+      if (e.key.toLowerCase() === "c" && !e.altKey && term.hasSelection()) {
+        void copyText(term.getSelection());
+        return false;
+      }
+
       const id =
         e.key === "+" || e.key === "="
           ? "editor.zoomIn"

@@ -113,8 +113,6 @@ export default function OutputPanel({
 }: OutputPanelProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
-  const [copied, setCopied] = useState(false);
-  const copyTimerRef = useRef<number | null>(null);
   const [draft, setDraft] = useState("");
   // -1 means "editing a fresh line"; anything >= 0 indexes into inputHistory
   // from the end, which is the direction ↑ walks.
@@ -142,12 +140,6 @@ export default function OutputPanel({
     const el = scrollRef.current;
     if (el && stickRef.current) el.scrollTop = el.scrollHeight;
   }, [output]);
-
-  useEffect(() => {
-    return () => {
-      if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
-    };
-  }, []);
 
   /**
    * The active renderer, in the shape the runner expects.
@@ -286,12 +278,6 @@ export default function OutputPanel({
     [submit, handleHistoryKey]
   );
 
-  const flashCopied = useCallback(() => {
-    setCopied(true);
-    if (copyTimerRef.current !== null) window.clearTimeout(copyTimerRef.current);
-    copyTimerRef.current = window.setTimeout(() => setCopied(false), 1200);
-  }, []);
-
   /** True when the current document selection lives inside the output area. */
   const selectionInPanel = useCallback(() => {
     const el = scrollRef.current;
@@ -303,13 +289,13 @@ export default function OutputPanel({
 
   const copySelection = useCallback(async () => {
     const text = document.getSelection()?.toString() ?? "";
-    if (await copyText(text)) flashCopied();
-  }, [flashCopied]);
+    await copyText(text);
+  }, []);
 
   const copyAll = useCallback(async () => {
     const text = output.map((l) => l.line).join("\n");
-    if (await copyText(text)) flashCopied();
-  }, [output, flashCopied]);
+    await copyText(text);
+  }, [output]);
 
   const selectAll = useCallback(() => {
     const el = scrollRef.current;
@@ -411,14 +397,6 @@ export default function OutputPanel({
           }`}
         >
           {terminalMode ? t("output.terminal.on") : t("output.terminal.off")}
-        </button>
-        <button
-          onClick={copyAll}
-          disabled={output.length === 0}
-          title={t("output.copyAllTitle")}
-          className="px-2 py-0.5 rounded text-xs text-sub hover:text-ink hover:bg-hover transition-colors disabled:opacity-40 disabled:text-faint disabled:hover:bg-transparent"
-        >
-          {copied ? t("output.copied") : t("output.copy")}
         </button>
         <button
           onClick={onClear}
