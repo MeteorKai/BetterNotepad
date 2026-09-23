@@ -137,15 +137,15 @@ export default function TabBar({
   }, [dragId, onMoveTab]);
 
   return (
-    <div className="h-10 bg-panel flex items-end border-b border-line-soft overflow-x-auto">
-      <div className="flex items-end min-h-full">
+    <div className="h-11 bg-panel-2 flex items-center px-2 border-b border-line-soft overflow-x-auto">
+      <div className="flex items-center min-h-full gap-1">
         {tabs.map((tab) => {
           const active = tab.id === activeTabId;
           const renaming = tab.id === renamingId;
           const dragging = dragId === tab.id;
           const cls = [
-            "group flex items-center gap-2 px-3 h-full rounded-t-lg text-sm whitespace-nowrap select-none cursor-pointer border-t-2",
-            active ? "bg-editor border-t-accent text-ink" : "bg-transparent border-t-transparent text-faint hover:bg-hover hover:text-ink",
+            "group flex items-center gap-2 px-3 h-8 rounded-lg text-sm whitespace-nowrap select-none cursor-pointer border transition-colors",
+            active ? "bg-editor border-line text-ink shadow-sm" : "bg-transparent border-transparent text-sub hover:bg-hover hover:text-ink",
             dragging ? "opacity-40" : "",
           ].join(" ");
           return (
@@ -202,7 +202,7 @@ export default function TabBar({
         })}
         <button
           onClick={onNew}
-          className="h-full px-2 text-faint hover:text-ink hover:bg-hover flex items-center shrink-0"
+          className="w-7 h-7 rounded-lg text-faint hover:text-ink hover:bg-hover flex items-center justify-center shrink-0 transition-colors"
           title={t("tab.newTitle")}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

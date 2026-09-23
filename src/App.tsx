@@ -775,7 +775,7 @@ function App() {
         <div className="flex-1 overflow-hidden p-3">
           <div ref={splitRef} className="h-full flex">
             <div
-              className="relative rounded-xl border border-line shadow-card overflow-hidden bg-editor"
+              className="relative rounded-2xl border border-line shadow-card overflow-hidden bg-editor"
               style={{ flex: previewOpen && isMarkdown ? editorRatio : 1, minWidth: 0 }}
             >
               <Editor
@@ -813,7 +813,7 @@ function App() {
               <>
                 <ResizeHandle onDrag={handleSplitDrag} />
                 <div
-                  className="rounded-xl border border-line shadow-card overflow-hidden bg-editor"
+                  className="rounded-2xl border border-line shadow-card overflow-hidden bg-editor"
                   style={{ flex: 1 - editorRatio, minWidth: 0 }}
                 >
                   <MarkdownPreview content={activeTab.content} />

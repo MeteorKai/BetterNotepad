@@ -73,7 +73,7 @@ function TreeNode({
           onClick={() => onToggleDir(node)}
           onContextMenu={(e) => onContextMenu(e, node)}
           data-path={node.path}
-          className="w-full flex items-center gap-1.5 py-1 pr-2 text-sm text-ink hover:bg-hover text-left whitespace-nowrap transition-colors"
+          className="w-[calc(100%_-_8px)] mx-1 rounded-lg flex items-center gap-1.5 py-1.5 pr-2 text-sm text-ink hover:bg-hover text-left whitespace-nowrap transition-colors"
           style={{ paddingLeft: indent }}
           title={node.path}
         >
@@ -173,8 +173,8 @@ function TreeNode({
       data-path={node.path}
       className={
         isActive
-          ? "w-full flex items-center gap-1.5 py-1 pr-2 text-sm bg-active text-ink text-left whitespace-nowrap transition-colors"
-          : "w-full flex items-center gap-1.5 py-1 pr-2 text-sm text-sub hover:bg-hover hover:text-ink text-left whitespace-nowrap transition-colors"
+          ? "w-[calc(100%_-_8px)] mx-1 rounded-lg flex items-center gap-1.5 py-1.5 pr-2 text-sm bg-accent-soft text-ink text-left whitespace-nowrap transition-colors"
+          : "w-[calc(100%_-_8px)] mx-1 rounded-lg flex items-center gap-1.5 py-1.5 pr-2 text-sm text-sub hover:bg-hover hover:text-ink text-left whitespace-nowrap transition-colors"
       }
       style={{ paddingLeft: indent + 20 }}
       title={node.path}
@@ -313,8 +313,8 @@ export default function FileExplorer({
 
   return (
     <aside className="shrink-0 bg-panel border-r border-line-soft flex flex-col" style={{ width }}>
-      <div className="h-9 flex items-center justify-between px-3 border-b border-line-soft">
-        <span className="text-xs font-semibold uppercase tracking-wide text-faint">{t("explorer.title")}</span>
+      <div className="h-10 flex items-center justify-between px-3 border-b border-line-soft">
+        <span className="text-xs font-semibold uppercase tracking-wider text-faint">{t("explorer.title")}</span>
         <button
           onClick={onClose}
           className="w-5 h-5 rounded flex items-center justify-center text-faint hover:text-ink hover:bg-hover transition-colors"
@@ -328,11 +328,16 @@ export default function FileExplorer({
       </div>
       <div className="flex-1 overflow-auto py-1">
         {!root ? (
-          <div className="px-3 py-4 flex flex-col items-center gap-3 text-center">
+          <div className="px-3 py-8 flex flex-col items-center gap-3 text-center">
+            <div className="w-10 h-10 rounded-xl bg-accent-soft text-accent flex items-center justify-center">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+              </svg>
+            </div>
             <p className="text-sm text-sub">{t("explorer.noFolder")}</p>
             <button
               onClick={onOpenFolder}
-              className="px-3 py-1.5 rounded-md text-sm font-medium text-accent-ink bg-accent hover:bg-accent-strong transition-colors"
+              className="px-3 py-1.5 rounded-lg text-sm font-medium text-accent-ink bg-accent hover:bg-accent-strong transition-colors shadow-sm"
             >
               {t("explorer.openFolder")}
             </button>

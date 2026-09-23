@@ -83,7 +83,7 @@ function ToolButton({
       title={title}
       disabled={disabled}
       aria-pressed={active}
-      className={`px-2.5 py-1.5 rounded-md transition-colors duration-150 flex items-center justify-center focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
+      className={`px-2.5 py-1.5 rounded-lg transition-colors duration-150 flex items-center justify-center focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
         disabled ? "opacity-40 cursor-default" : active ? "accent-chip" : "hover:bg-hover text-sub hover:text-ink"
       }`}
     >
@@ -93,7 +93,7 @@ function ToolButton({
 }
 
 function Separator() {
-  return <div className="w-px h-5 bg-line mx-1.5" />;
+  return <div className="w-px h-5 bg-line-soft mx-1" />;
 }
 
 export default function Toolbar({
@@ -125,11 +125,10 @@ export default function Toolbar({
   onOpenAbout,
 }: ToolbarProps) {
   return (
-    <div className="relative h-12 bg-panel flex items-center px-2 gap-0.5 border-b border-line-soft">
-      <div className="pointer-events-none absolute inset-0 pattern-dots" />
+    <div className="app-toolbar relative h-12 flex items-center px-2 gap-0.5 border-b border-line-soft">
       <div className="relative flex items-center gap-0.5 flex-1 min-w-0">
         <div className="flex items-center gap-2 pl-1 pr-2 select-none">
-          <div className="w-6 h-6 rounded-md bg-accent-soft text-accent flex items-center justify-center shrink-0">
+          <div className="w-7 h-7 rounded-[10px] bg-accent-soft text-accent flex items-center justify-center shrink-0 border border-line-soft">
             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />
               <polyline points="14 2 14 8 20 8" />
@@ -137,7 +136,7 @@ export default function Toolbar({
               <line x1="8" y1="17" x2="13" y2="17" />
             </svg>
           </div>
-          <span className="text-sm font-medium tracking-tight text-ink">BetterNotepad</span>
+          <span className="text-sm font-semibold tracking-tight text-ink">BetterNotepad</span>
         </div>
         <Separator />
         {/* File operations */}
@@ -264,7 +263,7 @@ export default function Toolbar({
         onClick={onOpenAbout}
         title={t("toolbar.aboutTitle")}
         aria-label={t("toolbar.aboutTitle")}
-        className="relative flex items-center justify-center w-8 h-8 rounded-md text-sub hover:bg-hover hover:text-ink transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+        className="relative flex items-center justify-center w-8 h-8 rounded-lg text-sub hover:bg-hover hover:text-ink transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="10" />
@@ -278,7 +277,7 @@ export default function Toolbar({
         onClick={onOpenSettings}
         title={t("toolbar.settingsTitle")}
         aria-label={t("toolbar.settingsAria")}
-        className="relative flex items-center justify-center w-8 h-8 rounded-md text-sub hover:bg-hover hover:text-ink transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+        className="relative flex items-center justify-center w-8 h-8 rounded-lg text-sub hover:bg-hover hover:text-ink transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="3" />
@@ -292,7 +291,7 @@ export default function Toolbar({
         title={mascotVisible ? t("toolbar.mascotHideTitle") : t("toolbar.mascotShowTitle")}
         aria-label={t("toolbar.mascotAria")}
         aria-pressed={mascotVisible}
-        className={`relative flex items-center justify-center w-8 h-8 rounded-md transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
+        className={`relative flex items-center justify-center w-8 h-8 rounded-lg transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
           mascotVisible ? "accent-chip" : "text-sub hover:bg-hover hover:text-ink"
         }`}
       >
@@ -308,7 +307,7 @@ export default function Toolbar({
         onClick={onCycleTheme}
         title={t("toolbar.themeSwitch", { theme: themeTitle(theme) })}
         aria-label={t("toolbar.themeAria")}
-        className="relative flex items-center justify-center w-8 h-8 rounded-md accent-chip focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+        className="relative flex items-center justify-center w-8 h-8 rounded-lg accent-chip focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <ThemeIcon theme={theme} />

@@ -49,7 +49,7 @@ export default function StatusBar({
   const currentLabel = ENCODING_OPTIONS.find((o) => o.id === encoding)?.label ?? encoding;
 
   return (
-    <div className="h-7 bg-panel-2 flex items-center justify-between px-4 text-xs text-sub border-t border-line-soft">
+    <div className="h-8 bg-panel-2 flex items-center justify-between px-4 text-xs text-sub border-t border-line-soft">
       <div className="flex items-center gap-4">
         <span className="flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-accent opacity-70" />
