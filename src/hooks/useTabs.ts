@@ -371,20 +371,27 @@ export function useTabs(options?: { defaultEol?: Eol }) {
 
   const openPaths = useCallback(
     async (paths: string[]) => {
-      const loaded: Array<{ filePath: string | null; fileName: string; content: string; encoding: string; eol?: Eol }> = [];
-      for (const path of paths) {
-        try {
-          const [{ content, encoding }, name] = await Promise.all([
-            invoke<{ content: string; encoding: string }>("read_file", { path }),
-            invoke<string>("get_file_name", { path }),
-          ]);
-          loaded.push({ filePath: path, fileName: name, content, encoding, eol: detectEol(content) });
-          recordRecent(path, name);
-        } catch (err) {
-          console.error("Failed to read file:", path, err);
+      type LoadedTab = { filePath: string; fileName: string; content: string; encoding: string; eol: Eol };
+      const loaded: (LoadedTab | null)[] = Array(paths.length).fill(null);
+      let next = 0;
+      await Promise.all(Array.from({ length: Math.min(4, paths.length) }, async () => {
+        while (next < paths.length) {
+          const index = next++;
+          const path = paths[index];
+          try {
+            const [{ content, encoding }, name] = await Promise.all([
+              invoke<{ content: string; encoding: string }>("read_file", { path }),
+              invoke<string>("get_file_name", { path }),
+            ]);
+            loaded[index] = { filePath: path, fileName: name, content, encoding, eol: detectEol(content) };
+          } catch (err) {
+            console.error("Failed to read file:", path, err);
+          }
         }
-      }
-      addTabs(loaded);
+      }));
+      const opened = loaded.filter((tab): tab is LoadedTab => tab !== null);
+      for (const tab of opened) recordRecent(tab.filePath, tab.fileName);
+      addTabs(opened);
     },
     [addTabs, recordRecent]
   );

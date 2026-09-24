@@ -35,19 +35,12 @@ import {
 
 export type { SearchResult, Match };
 
-// Above this many lines syntax highlighting is disabled entirely.
+// Above either limit syntax highlighting is disabled entirely.
 export const LARGE_FILE_LINE_THRESHOLD = 10000;
+export const LARGE_FILE_CHAR_THRESHOLD = 1_000_000;
 
-// Counting lines without splitting avoids allocating one string per line, and
-// bailing out early keeps this cheap on very large files.
-export function exceedsLineThreshold(text: string, threshold: number): boolean {
-  let lines = 1;
-  let idx = text.indexOf("\n");
-  while (idx !== -1) {
-    if (++lines > threshold) return true;
-    idx = text.indexOf("\n", idx + 1);
-  }
-  return false;
+function isLargeFile(state: EditorState): boolean {
+  return state.doc.lines > LARGE_FILE_LINE_THRESHOLD || state.doc.length > LARGE_FILE_CHAR_THRESHOLD;
 }
 
 // Undo history, cursor and scroll are kept per tab id outside the component, so
@@ -92,6 +85,7 @@ interface EditorProps {
   content: string;
   onChange: (value: string) => void;
   onCursorChange: (line: number, col: number, total: number) => void;
+  onLargeFileChange: (large: boolean) => void;
   onSelectionChange?: (count: number) => void;
   fontSize: number;
   fontFamily: string;
@@ -146,7 +140,7 @@ function escapeRegExp(s: string): string {
 const externalSync = Annotation.define<boolean>();
 
 const Editor = forwardRef<EditorHandle, EditorProps>(
-  ({ content, onChange, onCursorChange, onSelectionChange, fontSize, fontFamily, tabWidth, insertSpaces, language, wrap, bracketMatching, tabId }, ref) => {
+  ({ content, onChange, onCursorChange, onLargeFileChange, onSelectionChange, fontSize, fontFamily, tabWidth, insertSpaces, language, wrap, bracketMatching, tabId }, ref) => {
     const hostRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const lastEmittedRef = useRef(content);
@@ -158,6 +152,8 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
     onChangeRef.current = onChange;
     const onCursorChangeRef = useRef(onCursorChange);
     onCursorChangeRef.current = onCursorChange;
+    const onLargeFileChangeRef = useRef(onLargeFileChange);
+    onLargeFileChangeRef.current = onLargeFileChange;
     const onSelectionChangeRef = useRef(onSelectionChange);
     onSelectionChangeRef.current = onSelectionChange;
     const languageRef = useRef(language);
@@ -249,9 +245,10 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
                     if (!update.transactions.some((tr) => tr.annotation(externalSync))) {
                       onChangeRef.current(value);
                     }
-                    const large = update.state.doc.lines > LARGE_FILE_LINE_THRESHOLD;
+                    const large = isLargeFile(update.state);
                     if (large !== largeFileRef.current) {
                       largeFileRef.current = large;
+                      onLargeFileChangeRef.current(large);
                       reloadLanguage(update.view);
                     }
                   }
@@ -281,7 +278,8 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
       const view = new EditorView({ state, parent: hostRef.current! });
       viewRef.current = view;
       lastEmittedRef.current = content;
-      largeFileRef.current = state.doc.lines > LARGE_FILE_LINE_THRESHOLD;
+      largeFileRef.current = isLargeFile(state);
+      onLargeFileChangeRef.current(largeFileRef.current);
       reloadLanguage(view);
 
       if (reuse && saved) {
@@ -632,11 +630,14 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
             if (!re) return { current: 0, total: 0, error: true };
             next = src.replace(re, replacement);
           } else {
-            next = src;
-            for (let i = matches.length - 1; i >= 0; i--) {
-              const { start, end } = matches[i];
-              next = next.substring(0, start) + replacement + next.substring(end);
+            const parts: string[] = [];
+            let from = 0;
+            for (const { start, end } of matches) {
+              parts.push(src.slice(from, start), replacement);
+              from = end;
             }
+            parts.push(src.slice(from));
+            next = parts.join("");
           }
           view.dispatch({
             changes: { from: 0, to: view.state.doc.length, insert: next },

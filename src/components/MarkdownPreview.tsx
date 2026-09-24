@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { marked, type RendererObject } from "marked";
 import DOMPurify from "dompurify";
 import Prism from "prismjs";
@@ -65,11 +65,34 @@ const mdRenderer: RendererObject = {
 
 marked.use({ renderer: mdRenderer });
 
-export default function MarkdownPreview({ content }: { content: string }) {
-  const html = useMemo(() => {
-    const raw = marked.parse(content, { async: false });
-    return DOMPurify.sanitize(typeof raw === "string" ? raw : String(raw));
-  }, [content]);
+function renderMarkdown(content: string): string {
+  const raw = marked.parse(content, { async: false });
+  return DOMPurify.sanitize(typeof raw === "string" ? raw : String(raw));
+}
+
+export default function MarkdownPreview({ content, tabId }: { content: string; tabId: string }) {
+  const [html, setHtml] = useState(() => renderMarkdown(content));
+  const renderedContentRef = useRef(content);
+  const renderedTabIdRef = useRef(tabId);
+
+  // Switching tabs must never show the previous document during the typing debounce.
+  useLayoutEffect(() => {
+    if (renderedTabIdRef.current === tabId) return;
+    renderedTabIdRef.current = tabId;
+    renderedContentRef.current = content;
+    setHtml(renderMarkdown(content));
+  }, [tabId, content]);
+
+  useEffect(() => {
+    if (renderedTabIdRef.current !== tabId || content === renderedContentRef.current) return;
+    // Editing stays immediate; only the expensive preview render is delayed.
+    const timer = window.setTimeout(() => {
+      if (renderedTabIdRef.current !== tabId) return;
+      renderedContentRef.current = content;
+      setHtml(renderMarkdown(content));
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [content, tabId]);
 
   // The app shell sets `user-select: none`; rendered markdown opts back in so
   // its text can be selected and copied like any other document content.

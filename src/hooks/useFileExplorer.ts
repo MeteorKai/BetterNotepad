@@ -2,7 +2,7 @@ import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readDir } from "@tauri-apps/plugin-fs";
-import { join } from "@tauri-apps/api/path";
+import { sep } from "@tauri-apps/api/path";
 
 export interface FileNode {
   name: string;
@@ -48,9 +48,13 @@ export function useFileExplorer() {
   const readDirEntries = useCallback(async (dirPath: string): Promise<FileNode[]> => {
     const entries = await readDir(dirPath);
     const nodes: FileNode[] = [];
+    const separator = sep();
+    const prefix = dirPath.endsWith(separator) || (separator === "\\" && dirPath.endsWith("/"))
+      ? dirPath
+      : dirPath + separator;
     for (const e of entries) {
       if (e.name.startsWith(".") || SKIP_DIRS.has(e.name)) continue;
-      nodes.push({ name: e.name, path: await join(dirPath, e.name), isDir: e.isDirectory });
+      nodes.push({ name: e.name, path: prefix + e.name, isDir: e.isDirectory });
     }
     nodes.sort((a, b) =>
       a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1
@@ -100,13 +104,16 @@ export function useFileExplorer() {
       try {
         const children = await readDirEntries(dirPath);
         setRoot((r) =>
-          updateTreeNode(r, dirPath, (n) => ({
-            ...n,
-            children: children.map((c) => {
-              const old = n.children?.find((oc) => oc.path === c.path);
-              return old?.isDir && old.children ? { ...c, children: old.children } : c;
-            }),
-          }))
+          updateTreeNode(r, dirPath, (n) => {
+            const oldChildren = new Map((n.children ?? []).map((c) => [c.path, c]));
+            return {
+              ...n,
+              children: children.map((c) => {
+                const old = oldChildren.get(c.path);
+                return old?.isDir && old.children ? { ...c, children: old.children } : c;
+              }),
+            };
+          })
         );
       } catch (err) {
         console.error("Failed to refresh dir:", dirPath, err);

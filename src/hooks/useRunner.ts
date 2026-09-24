@@ -35,6 +35,10 @@ interface PtyChunk {
   code: number | null;
 }
 
+type PendingOutput =
+  | { kind: "line"; value: RunLine }
+  | { kind: "stream"; values: string[] };
+
 /** Byte stream and lifecycle control for the terminal renderer. */
 export interface TerminalSink {
   write: (data: Uint8Array) => void;
@@ -50,6 +54,7 @@ const EXIT_EVENT = "run://exit";
 /** Fallback geometry; the real value arrives from the fit addon on mount. */
 const DEFAULT_COLS = 80;
 const DEFAULT_ROWS = 24;
+const OUTPUT_BATCH_MS = 50;
 
 function loadConfig(): InterpreterConfig[] {
   try {
@@ -74,9 +79,51 @@ export function useRunner() {
   // renderer knows to show the terminal instead of the text panel.
   const terminalIdRef = useRef<string | null>(null);
   const sinkRef = useRef<TerminalSink | null>(null);
+  const pendingOutputRef = useRef<PendingOutput[]>([]);
+  const outputTimerRef = useRef<number | null>(null);
   // Size of the terminal viewport, kept current by the fit addon so a session
   // opened after a panel resize starts life at the right width.
   const sizeRef = useRef({ cols: DEFAULT_COLS, rows: DEFAULT_ROWS });
+
+  const discardPendingOutput = useCallback(() => {
+    if (outputTimerRef.current !== null) window.clearTimeout(outputTimerRef.current);
+    outputTimerRef.current = null;
+    pendingOutputRef.current = [];
+  }, []);
+
+  const flushPendingOutput = useCallback(() => {
+    if (outputTimerRef.current !== null) window.clearTimeout(outputTimerRef.current);
+    outputTimerRef.current = null;
+    const pending = pendingOutputRef.current;
+    if (pending.length === 0) return;
+    pendingOutputRef.current = [];
+    setOutput((prev) => {
+      const next = [...prev];
+      for (const item of pending) {
+        if (item.kind === "line") {
+          next.push(item.value);
+        } else {
+          const text = item.values.join("");
+          const last = next[next.length - 1];
+          if (last && last.id === "stream") {
+            next[next.length - 1] = { ...last, line: last.line + text };
+          } else {
+            next.push({ id: "stream", stream: "stdout", line: text });
+          }
+        }
+      }
+      return next;
+    });
+  }, []);
+
+  const queueOutput = useCallback((item: PendingOutput) => {
+    pendingOutputRef.current.push(item);
+    if (outputTimerRef.current === null) {
+      outputTimerRef.current = window.setTimeout(flushPendingOutput, OUTPUT_BATCH_MS);
+    }
+  }, [flushPendingOutput]);
+
+  useEffect(() => discardPendingOutput, [discardPendingOutput]);
 
   useEffect(() => {
     try {
@@ -95,12 +142,13 @@ export function useRunner() {
     (async () => {
       unOut = await listen<RunLine>(OUT_EVENT, (e) => {
         if (!cancelled && e.payload.id === runIdRef.current) {
-          setOutput((prev) => [...prev, e.payload]);
+          queueOutput({ kind: "line", value: e.payload });
         }
       });
       unExit = await listen<RunExit>(EXIT_EVENT, (e) => {
         if (cancelled) return;
         if (e.payload.id !== runIdRef.current) return;
+        flushPendingOutput();
         setRunning(false);
         setLastExit({ id: e.payload.id, code: e.payload.code });
         runIdRef.current = null;
@@ -111,7 +159,7 @@ export function useRunner() {
       unOut?.();
       unExit?.();
     };
-  }, []);
+  }, [queueOutput, flushPendingOutput]);
 
   const setInterpreter = useCallback((language: string, patch: Partial<InterpreterConfig>) => {
     setConfig((prev) =>
@@ -176,6 +224,7 @@ export function useRunner() {
       terminal = false
     ): Promise<boolean> => {
       if (!("__TAURI_INTERNALS__" in window)) {
+        discardPendingOutput();
         setOutput([{ id: "local", stream: "stderr", line: t("run.desktopOnly") }]);
         return false;
       }
@@ -186,6 +235,7 @@ export function useRunner() {
 
       const dir = cwd?.trim() || null;
       const id = `run-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+      discardPendingOutput();
       runIdRef.current = id;
       setLastExit(null);
 
@@ -215,6 +265,7 @@ export function useRunner() {
           // belonged to whatever is on screen now.
           if (terminalIdRef.current !== id) return;
           if (msg.kind === "exit") {
+            flushPendingOutput();
             terminalIdRef.current = null;
             runIdRef.current = null;
             setRunning(false);
@@ -261,6 +312,7 @@ export function useRunner() {
         return true;
       } catch (err) {
         console.error("Failed to run:", err);
+        flushPendingOutput();
         setRunning(false);
         runIdRef.current = null;
         setOutput((prev) => [
@@ -270,7 +322,7 @@ export function useRunner() {
         return false;
       }
     },
-    [closeTerminal]
+    [closeTerminal, discardPendingOutput, flushPendingOutput]
   );
 
   const stop = useCallback(async () => {
@@ -284,6 +336,7 @@ export function useRunner() {
       } catch {
         /* ignore */
       }
+      flushPendingOutput();
       runIdRef.current = null;
       setRunning(false);
       return;
@@ -295,9 +348,10 @@ export function useRunner() {
         /* ignore */
       }
     }
+    flushPendingOutput();
     setRunning(false);
     runIdRef.current = null;
-  }, []);
+  }, [flushPendingOutput]);
 
   /**
    * Feed one line to the running program's stdin. In terminal mode the bytes
@@ -322,6 +376,7 @@ export function useRunner() {
     if (!id) return false;
     // Echo even an empty line (Enter on a blank line) so the interaction is
     // visible in the transcript.
+    flushPendingOutput();
     setOutput((prev) => [
       ...prev,
       { id: "stdin", stream: "stdout", notice: true, line: `> ${text}` },
@@ -336,7 +391,7 @@ export function useRunner() {
       ]);
       return false;
     }
-  }, []);
+  }, [flushPendingOutput]);
 
   /**
    * Send raw terminal input (keystrokes, arrow keys, Ctrl+C). Used by the
@@ -383,19 +438,8 @@ export function useRunner() {
    */
   const appendLines = useCallback((lines: string[]) => {
     if (lines.length === 0) return;
-    setOutput((prev) => {
-      const next = [...prev];
-      for (const line of lines) {
-        const last = next[next.length - 1];
-        if (last && last.id === "stream") {
-          next[next.length - 1] = { ...last, line: last.line + line };
-        } else {
-          next.push({ id: "stream", stream: "stdout", line });
-        }
-      }
-      return next;
-    });
-  }, []);
+    queueOutput({ kind: "stream", values: lines });
+  }, [queueOutput]);
 
   /**
    * Replace the text transcript wholesale. Used when the terminal hands its
@@ -404,27 +448,30 @@ export function useRunner() {
    * between the two views from duplicating the output.
    */
   const setTranscript = useCallback((lines: string[]) => {
+    discardPendingOutput();
     setOutput(
       lines.map((line) => ({ id: "stream", stream: "stdout" as const, line }))
     );
-  }, []);
+  }, [discardPendingOutput]);
 
   const clearOutput = useCallback(() => {
+    discardPendingOutput();
     setOutput([]);
     setLastExit(null);
     // Only wipe the scrollback when there is a terminal to wipe; clearing it
     // mid-run would destroy the record of what the program has printed.
     if (!terminalIdRef.current) sinkRef.current?.clear();
-  }, []);
+  }, [discardPendingOutput]);
 
   const showLocal = useCallback((line: string) => {
     if (terminalIdRef.current) {
       sinkRef.current?.write(new TextEncoder().encode(`\x1b[2m${line}\x1b[0m\r\n`));
       return;
     }
+    discardPendingOutput();
     setOutput([{ id: "local", stream: "stderr", line }]);
     setLastExit(null);
-  }, []);
+  }, [discardPendingOutput]);
 
   return {
     config,

@@ -40,43 +40,52 @@ export default function GlobalSearchPanel({ root, onOpenResult, onClose }: Globa
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const timerRef = useRef<number | null>(null);
+  const requestIdRef = useRef(0);
 
   const doSearch = useCallback(
-    async (q: string, cs: boolean) => {
+    async (q: string, cs: boolean, requestId: number) => {
+      if (requestId !== requestIdRef.current) return;
       if (!root || !q.trim()) {
-        setResults(null);
-        setSearching(false);
-        setError(null);
+        if (requestId === requestIdRef.current) {
+          setResults(null);
+          setSearching(false);
+          setError(null);
+        }
         return;
       }
-      setSearching(true);
-      setError(null);
       try {
         const res = await invoke<SearchFileResult[]>("search_in_files", {
           root,
           query: q,
           caseSensitive: cs,
         });
-        setResults(res);
+        if (requestId === requestIdRef.current) setResults(res);
       } catch (err) {
-        setResults(null);
-        setError(String(err));
+        if (requestId === requestIdRef.current) {
+          setResults(null);
+          setError(String(err));
+        }
       } finally {
-        setSearching(false);
+        if (requestId === requestIdRef.current) setSearching(false);
       }
     },
     [root]
   );
 
   useEffect(() => {
+    const requestId = ++requestIdRef.current;
+    setResults(null);
+    setError(null);
+    setSearching(Boolean(root && query.trim()));
     if (timerRef.current) window.clearTimeout(timerRef.current);
     timerRef.current = window.setTimeout(() => {
-      void doSearch(query, caseSensitive);
+      void doSearch(query, caseSensitive, requestId);
     }, 400);
     return () => {
       if (timerRef.current) window.clearTimeout(timerRef.current);
+      requestIdRef.current++;
     };
-  }, [query, caseSensitive, doSearch]);
+  }, [root, query, caseSensitive, doSearch]);
 
   useEffect(() => {
     inputRef.current?.focus();

@@ -90,6 +90,11 @@ export const searchField = StateField.define<SearchState>({
       }
     }
     if (!recompute) return next;
+    if (!next.query) {
+      return next.matches.length || next.error || next.current
+        ? { ...next, matches: [], error: false, current: 0 }
+        : next;
+    }
     const { matches, error } = findMatches(
       tr.state.doc.toString(),
       next.query,

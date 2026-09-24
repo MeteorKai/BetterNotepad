@@ -289,6 +289,8 @@ export default function Mascot({ typingTick, initialPos, onSavePos, onHide }: Ma
     };
 
     const render = (now: number) => {
+      raf = 0;
+      if (document.hidden) return;
       const dt = Math.min((now - prev) / 1000, 0.05);
       prev = now;
       const t = now / 1000;
@@ -357,9 +359,21 @@ export default function Mascot({ typingTick, initialPos, onSavePos, onHide }: Ma
       renderer.render(scene, camera);
       raf = requestAnimationFrame(render);
     };
-    raf = requestAnimationFrame(render);
+
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(raf);
+        raf = 0;
+      } else if (raf === 0) {
+        prev = performance.now();
+        raf = requestAnimationFrame(render);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    onVisibilityChange();
 
     return () => {
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       cancelAnimationFrame(raf);
       grad.dispose();
       scene.traverse((o) => {

@@ -1,12 +1,10 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import Toolbar from "./components/Toolbar";
 import Editor, {
   clearEditorHistory,
-  exceedsLineThreshold,
-  LARGE_FILE_LINE_THRESHOLD,
   type EditorHandle,
 } from "./components/Editor";
 import StatusBar from "./components/StatusBar";
@@ -161,11 +159,13 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [selectionLen, setSelectionLen] = useState(0);
+  const [activeLargeFile, setActiveLargeFile] = useState(false);
 
-  const [typingTick, setTypingTick] = useState(0);
-  useEffect(() => {
-    setTypingTick((t) => t + 1);
-  }, [activeTab.content]);
+  const typingTickRef = useRef(0);
+  const handleEditorChange = useCallback((content: string) => {
+    typingTickRef.current += 1;
+    setActiveContent(content);
+  }, [setActiveContent]);
 
   const firstTabIdRef = useRef(activeTab.id);
   const tabsRef = useRef(tabs);
@@ -280,10 +280,6 @@ function App() {
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
   const isMarkdown = detectLanguage(activeTab.fileName) === "markdown";
-  const activeLargeFile = useMemo(
-    () => exceedsLineThreshold(activeTab.content, LARGE_FILE_LINE_THRESHOLD),
-    [activeTab.content]
-  );
   const revealLineRef = useRef<{ path: string; line: number } | null>(null);
 
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -783,8 +779,9 @@ function App() {
                 ref={editorRef}
                 tabId={activeTab.id}
                 content={activeTab.content}
-                onChange={setActiveContent}
+                onChange={handleEditorChange}
                 onCursorChange={updateCursor}
+                onLargeFileChange={setActiveLargeFile}
                 onSelectionChange={setSelectionLen}
                 fontSize={editorSettings.fontSize}
                 fontFamily={editorSettings.fontFamily}
@@ -816,7 +813,7 @@ function App() {
                   className="rounded-2xl border border-line shadow-card overflow-hidden bg-editor"
                   style={{ flex: 1 - editorRatio, minWidth: 0 }}
                 >
-                  <MarkdownPreview content={activeTab.content} />
+                  <MarkdownPreview content={activeTab.content} tabId={activeTab.id} />
                 </div>
               </>
             )}
@@ -876,7 +873,7 @@ function App() {
       )}
       {mascot.visible && (
         <Mascot
-          typingTick={typingTick}
+          typingTick={typingTickRef.current}
           initialPos={mascot.loadPos()}
           onSavePos={mascot.savePos}
           onHide={mascot.toggle}
