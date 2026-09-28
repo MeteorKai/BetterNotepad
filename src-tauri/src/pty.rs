@@ -35,11 +35,14 @@
 //!    instance — is decoded as GBK by conhost and arrives as mojibake. We put
 //!    the pseudo-console on UTF-8 before starting the program; see
 //!    [`prime_utf8_console`] for why that has to happen on the console itself
-//!    rather than by wrapping the command in a shell.
+//!    rather than by wrapping the command in a shell. The repaint that change
+//!    provokes is removed by [`BlankSweep`] on the way to the frontend.
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, RecvTimeoutError};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use portable_pty::{native_pty_system, Child, CommandBuilder, MasterPty, PtySize};
@@ -49,10 +52,26 @@ use serde::Serialize;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager};
 
+use crate::blanksweep::BlankSweep;
+use crate::runlog::{self, RunLog, RunLogInfo};
+
 /// Serialises the open+spawn sequence. See hazard 1 in the module docs.
 /// Deliberately a global rather than per-session: the failure mode is
 /// cross-session, so the lock has to be too.
 static SPAWN_LOCK: Mutex<()> = Mutex::new(());
+
+/// How long the output pump collects bytes before handing them to the frontend.
+///
+/// Every channel message costs a hop through the *main thread*: Tauri delivers
+/// it by evaluating a JS snippet on the wry event loop, which is the same loop
+/// that has to answer the window's messages. One message per `read` therefore
+/// lets a program printing in a tight loop starve that loop — the window stops
+/// responding and cannot be dragged. 16 ms (one frame) is imperceptible to the
+/// user while capping a run at ~60 messages per second.
+const PTY_FLUSH_MS: u64 = 16;
+
+/// Ceiling on one coalesced chunk, so a burst cannot build one huge message.
+const PTY_MAX_CHUNK: usize = 64 * 1024;
 
 /// One live PTY session.
 pub(crate) struct PtySession {
@@ -72,6 +91,10 @@ pub(crate) struct PtySession {
     #[cfg(windows)]
     #[allow(dead_code)]
     job: Option<JobHandle>,
+    /// Set by the output pump once it has handed over the last bytes. Read by
+    /// `pty_close` so the log it reports is complete rather than caught
+    /// mid-tail.
+    pump_done: Arc<AtomicBool>,
 }
 
 /// Sessions keyed by the id the frontend generated.
@@ -95,6 +118,10 @@ pub struct PtyChunk {
     pub data: Vec<u8>,
     /// Exit status for `"exit"`.
     pub code: Option<i32>,
+    /// Only ever set on the `"exit"` chunk: where this session's complete output
+    /// was written. Skipped elsewhere rather than sent as a null on every frame.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log: Option<RunLogInfo>,
 }
 
 /// Events the reader thread can push.
@@ -103,14 +130,16 @@ fn data_chunk(data: Vec<u8>) -> PtyChunk {
         kind: "data".into(),
         data,
         code: None,
+        log: None,
     }
 }
 
-fn exit_chunk(code: Option<i32>) -> PtyChunk {
+fn exit_chunk(code: Option<i32>, log: Option<RunLogInfo>) -> PtyChunk {
     PtyChunk {
         kind: "exit".into(),
         data: Vec::new(),
         code,
+        log,
     }
 }
 
@@ -170,6 +199,10 @@ fn prime_utf8_console(slave: &Box<dyn SlavePty + Send>) {
     // output.
     std::thread::sleep(Duration::from_millis(60));
 }
+
+// The repaint a code-page change provokes used to be filtered right here. It
+// now lives in its own module so the probe that measured the repaint can run
+// the shipped algorithm rather than a copy of it — see `blanksweep.rs`.
 
 // ---------------------------------------------------------------------------
 // Windows job object
@@ -264,7 +297,11 @@ impl Drop for JobHandle {
 ///
 /// Output arrives on `on_data` as it is produced — that is the whole point of
 /// this command. The channel also carries the final exit status.
-#[tauri::command]
+// Runs off the main thread on purpose. Opening a session waits on a throwaway
+// `cmd` (see `prime_utf8_console`), which on a cold or busy machine is long
+// enough to be felt as a freeze if it happens on the thread that drives the
+// window. `SPAWN_LOCK` still serialises the critical section either way.
+#[tauri::command(async)]
 #[allow(clippy::too_many_arguments)]
 pub fn pty_open(
     app: AppHandle,
@@ -362,6 +399,11 @@ pub fn pty_open(
         handle
     };
 
+    // Set by the pump below, waited on by whoever reports the exit. Declared
+    // here because the session — and therefore `pty_close` — has to be able to
+    // see it.
+    let pump_done = Arc::new(AtomicBool::new(false));
+
     {
         let state = app.state::<PtyState>();
         let mut map = state.inner().0.lock().unwrap();
@@ -373,6 +415,7 @@ pub fn pty_open(
                 child,
                 #[cfg(windows)]
                 job,
+                pump_done: pump_done.clone(),
             },
         );
     }
@@ -381,16 +424,25 @@ pub fn pty_open(
     // concurrent-spawn hazard only covers creation.
     drop(_spawn_guard);
 
+    // The complete session output goes to a file as well as to xterm. xterm's
+    // scrollback is a cap — a program that prints more than it holds loses its
+    // early output for good — and the log has none. Registered by id so both
+    // the exit-watch thread and `pty_close` can hand the path to the frontend.
+    let log = app.state::<runlog::RunLogs>().start(&app, &id);
+
     // Reader thread. Blocking reads stay off the Tauri event loop, and the
     // loop only ends when the master is closed or the child exits (EOF).
-    let reader_channel = on_data.clone();
+    //
+    // The bytes go to the pump below rather than straight to the channel: see
+    // PTY_FLUSH_MS for why one message per read is not an option.
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
     std::thread::spawn(move || {
         let mut buf = vec![0u8; 8192];
         loop {
             match reader.read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    if reader_channel.send(data_chunk(buf[..n].to_vec())).is_err() {
+                    if tx.send(buf[..n].to_vec()).is_err() {
                         // Frontend went away; stop pumping.
                         break;
                     }
@@ -398,7 +450,94 @@ pub fn pty_open(
                 Err(_) => break,
             }
         }
+        // Dropping `tx` is what tells the pump there is nothing left, and lets
+        // it flush whatever it is still holding.
     });
+
+    // Output pump. `recv` blocks until there is something to send, so an idle
+    // session costs nothing and an isolated write — a prompt, an echoed
+    // keystroke — goes out with no added latency. Once bytes are flowing the
+    // pump keeps collecting for up to PTY_FLUSH_MS and sends them as one chunk.
+    //
+    // The log is written here, before each chunk is batched, for the same
+    // reason the piped path writes it before queueing: the panel is a window,
+    // the file is the record.
+    let pump_channel = on_data.clone();
+    let pump_log: Option<Arc<RunLog>> = log.clone();
+    let pump_done2 = pump_done.clone();
+    std::thread::spawn(move || {
+        let window = Duration::from_millis(PTY_FLUSH_MS);
+        let mut acc: Vec<u8> = Vec::with_capacity(8192);
+        // Repaints are removed here, before the bytes are batched, so the same
+        // clean stream is what reaches both the terminal and the log.
+        let mut sweep = BlankSweep::default();
+        loop {
+            match rx.recv() {
+                Ok(first) => {
+                    let clean = sweep.feed(&first);
+                    if let Some(log) = &pump_log {
+                        log.write_bytes(&clean);
+                    }
+                    acc.extend_from_slice(&clean);
+                }
+                // The reader dropped its sender: everything the child wrote has
+                // been handed over, and what is left in `acc` goes out below.
+                Err(_) => break,
+            }
+            let deadline = Instant::now() + window;
+            while acc.len() < PTY_MAX_CHUNK {
+                let now = Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                match rx.recv_timeout(deadline - now) {
+                    Ok(more) => {
+                        let clean = sweep.feed(&more);
+                        if let Some(log) = &pump_log {
+                            log.write_bytes(&clean);
+                        }
+                        acc.extend_from_slice(&clean);
+                    }
+                    Err(RecvTimeoutError::Timeout) => break,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            }
+            if pump_channel.send(data_chunk(std::mem::take(&mut acc))).is_err() {
+                // Frontend went away. Nothing left to send, but the bytes are
+                // already in the log, which is what matters.
+                break;
+            }
+        }
+        // Nothing more can arrive, so bytes the sweep held back can no longer
+        // turn out to be the start of a repaint.
+        acc.extend_from_slice(&sweep.finish());
+        if !acc.is_empty() {
+            let _ = pump_channel.send(data_chunk(std::mem::take(&mut acc)));
+        }
+        if let Some(log) = &pump_log {
+            log.flush();
+        }
+        pump_done2.store(true, Ordering::SeqCst);
+    });
+
+    // Reports the exit, but only once the pump has handed over the tail. The
+    // frontend stops accepting output the moment it sees the exit, so a chunk
+    // sent afterwards would be dropped — and the log it is told about would
+    // then be the one complete record of those lines.
+    let send_exit = {
+        let on_data = on_data.clone();
+        let app3 = app.clone();
+        let id4 = id.clone();
+        let pump_done = pump_done.clone();
+        move |code: Option<i32>| {
+            let deadline = Instant::now() + Duration::from_millis(600);
+            while !pump_done.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let log = runlog::finish(&app3, &id4);
+            let _ = on_data.send(exit_chunk(code, log));
+        }
+    };
 
     // Exit-watch thread. Polling keeps this simple and matches how the piped
     // path already tracks completion; the interval is short enough that the
@@ -417,7 +556,7 @@ pub fn pty_open(
                     // thread) and the job handle (kills any stragglers).
                     map.remove(&id3);
                     drop(map);
-                    let _ = on_data.send(exit_chunk(code));
+                    send_exit(code);
                     break;
                 }
                 Ok(None) => {
@@ -426,10 +565,13 @@ pub fn pty_open(
                 Err(_) => {
                     map.remove(&id3);
                     drop(map);
-                    let _ = on_data.send(exit_chunk(None));
+                    send_exit(None);
                     break;
                 }
             },
+            // Gone from the map, so `pty_close` ended it. That command reports
+            // the log itself; reporting here too would resurrect an id the
+            // frontend has already moved on from.
             None => break,
         }
     });
@@ -481,28 +623,69 @@ pub fn pty_resize(app: AppHandle, id: String, cols: u16, rows: u16) -> Result<()
         .map_err(|e| format!("Failed to resize the terminal: {}", e))
 }
 
-/// Close a session. Dropping the job handle terminates the whole process tree.
-#[tauri::command]
-pub fn pty_close(app: AppHandle, id: String) -> Result<(), String> {
-    let state = app.state::<PtyState>();
-    let mut map = state.inner().0.lock().unwrap();
-    if let Some(mut session) = map.remove(&id) {
+/// Close a session, and report where its complete output was written.
+///
+/// Dropping the job handle terminates the whole process tree. The return value
+/// is what lets the frontend keep offering the log after a session the user
+/// stopped by hand — the exit chunk never arrives in that case, because the
+/// session is removed from the map before the exit-watch thread can see it.
+// Off the main thread on purpose: it waits for the output pump's tail (see
+// below), and that wait must not be served by the thread that repaints the
+// window.
+#[tauri::command(async)]
+pub fn pty_close(app: AppHandle, id: String) -> Result<Option<RunLogInfo>, String> {
+    let session = {
+        let state = app.state::<PtyState>();
+        let mut map = state.inner().0.lock().unwrap();
+        // The lock is released before waiting: holding it would freeze
+        // `pty_write` and the exit-watch thread for the length of the wait.
+        map.remove(&id)
+    };
+    if let Some(mut session) = session {
+        let pump_done = session.pump_done.clone();
         // Best effort: the job drop below is what actually reaps descendants on
         // Windows, but killing the direct child first makes the exit status
         // deterministic on platforms without job objects.
         let _ = session.child.kill();
         let _ = session.child.wait();
+        // Dropping the session closes the pseudo-console, which is what drives
+        // the reader to EOF and the pump to hand over its tail. Waiting before
+        // this would be waiting for something that cannot happen yet.
+        drop(session);
+        let deadline = Instant::now() + Duration::from_millis(600);
+        while !pump_done.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
     }
-    Ok(())
+    Ok(runlog::finish(&app, &id))
 }
 
 /// Kill every session. Called on app shutdown so no terminal outlives the
 /// window; without it a script started in a terminal would keep running after
 /// the user closes BetterNotepad.
 pub fn close_all(app: &AppHandle) {
-    let state = app.state::<PtyState>();
-    let mut map = state.inner().0.lock().unwrap();
-    for (_, mut session) in map.drain() {
-        let _ = session.child.kill();
+    // Sessions have to be dropped — closing each pseudo-console — before the
+    // wait, for the same reason `pty_close` does it: only then does a pump reach
+    // its tail, and only then is the flush below worth doing.
+    let pending: Vec<(String, Arc<AtomicBool>)> = {
+        let state = app.state::<PtyState>();
+        let mut map = state.inner().0.lock().unwrap();
+        let mut pending = Vec::new();
+        for (id, mut session) in map.drain() {
+            pending.push((id, session.pump_done.clone()));
+            let _ = session.child.kill();
+            drop(session);
+        }
+        pending
+    };
+    let deadline = Instant::now() + Duration::from_millis(600);
+    for (id, done) in pending {
+        while !done.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        // The pumps die with the process, so anything still buffered would be
+        // lost: this is the last chance to get a run that was live at shutdown
+        // into its file.
+        runlog::finish(app, &id);
     }
 }

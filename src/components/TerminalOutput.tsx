@@ -4,7 +4,6 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SerializeAddon } from "@xterm/addon-serialize";
-import { invoke } from "@tauri-apps/api/core";
 import "@xterm/xterm/css/xterm.css";
 import { copyText } from "../utils/clipboard";
 
@@ -54,6 +53,8 @@ function readTheme(el: HTMLElement) {
 }
 
 export interface TerminalOutputProps {
+  /** Whether this terminal has a laid-out, interactive viewport. */
+  visible: boolean;
   /** Registered once the terminal exists. `null` on unmount. */
   onReady: (api: TerminalHandle | null) => void;
   /** Raw terminal bytes produced by a keystroke or paste. */
@@ -110,6 +111,7 @@ const CAPTURED_PLAIN_KEYS = new Set([
  * long as the parent restores the scrollback.
  */
 export default function TerminalOutput({
+  visible,
   onReady,
   onData,
   onResize,
@@ -119,6 +121,8 @@ export default function TerminalOutput({
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   // Font size as reported by the latest render, readable from the mount effect
   // without adding it to that effect's dependencies.
   const fontSizeRef = useRef({ fontSize, fontFamily });
@@ -142,9 +146,12 @@ export default function TerminalOutput({
       fontFamily: fontSizeRef.current.fontFamily,
       fontSize: fontSizeRef.current.fontSize,
       lineHeight: 1.3,
-      // The panel has its own scrollback; letting xterm keep its default 1000
-      // lines is plenty and avoids growing the DOM during a chatty run.
-      scrollback: 5000,
+      // Deep enough that a chatty run keeps its early output reachable, but
+      // still a cap — one the panel can point past, since the backend writes
+      // every run's complete output to a log file. Kept in step with the text
+      // view's MAX_OUTPUT_LINES so switching views does not change how much
+      // history survives.
+      scrollback: 20000,
       allowProposedApi: true,
       theme: readTheme(host),
     });
@@ -170,13 +177,20 @@ export default function TerminalOutput({
     termRef.current = term;
     fitRef.current = fit;
 
+    const fitVisible = () => {
+      if (!visibleRef.current || host.clientWidth <= 0 || host.clientHeight <= 0) return;
+      try {
+        fit.fit();
+        onResizeRef.current(term.cols, term.rows);
+      } catch {
+        /* host not laid out yet */
+      }
+    };
+
     const disposable = term.onData((data) => onDataRef.current(data));
 
-    // Ctrl/Cmd + `+` / `-` / `0` zoom the terminal font the same way they zoom
-    // the editor. Handled inside xterm's key pipeline so the browser's own
-    // zoom — and the app's window-level shortcut — never fire. Returning false
-    // tells xterm not to encode the key; the handler itself cannot be detached,
-    // but it dies with the terminal.
+    // Ctrl/Cmd + `+` / `-` / `0` is handled by the app's window-level zoom
+    // shortcut. Returning false keeps xterm from sending those keys to the PTY.
     term.attachCustomKeyEventHandler((e) => {
       if (e.type !== "keydown") return true;
       if (!(e.ctrlKey || e.metaKey)) return true;
@@ -187,24 +201,16 @@ export default function TerminalOutput({
       // program as SIGINT (^C), hence the `hasSelection()` test instead of
       // binding the chord outright. Returning false keeps xterm from encoding
       // `\x03`, exactly as the zoom branch below does.
-      if (e.key.toLowerCase() === "c" && !e.altKey && term.hasSelection()) {
+      if (e.key.toLowerCase() === "c" && !e.altKey && !e.getModifierState("AltGraph") && term.hasSelection()) {
+        e.preventDefault();
+        e.stopPropagation();
         void copyText(term.getSelection());
         return false;
       }
 
-      const id =
-        e.key === "+" || e.key === "="
-          ? "editor.zoomIn"
-          : e.key === "-"
-            ? "editor.zoomOut"
-            : e.key === "0"
-              ? "editor.zoomReset"
-              : null;
-      if (!id) return true;
+      if (e.altKey || e.getModifierState("AltGraph")) return true;
+      if (e.key !== "+" && e.key !== "=" && e.key !== "-" && e.key !== "0") return true;
       e.preventDefault();
-      void invoke(id).catch(() => {
-        /* browser build: no host to zoom */
-      });
       return false;
     });
 
@@ -227,14 +233,7 @@ export default function TerminalOutput({
 
     // First fit has to wait for layout; the panel is often still 0-height on
     // the very first effect pass.
-    const initial = requestAnimationFrame(() => {
-      try {
-        fit.fit();
-        onResizeRef.current(term.cols, term.rows);
-      } catch {
-        /* host not laid out yet */
-      }
-    });
+    const initial = requestAnimationFrame(fitVisible);
 
     onReadyRef.current({
       write: (data) => term.write(data),
@@ -248,25 +247,13 @@ export default function TerminalOutput({
         }
       },
       refit: () => {
-        try {
-          fit.fit();
-          onResizeRef.current(term.cols, term.rows);
-        } catch {
-          /* ignore */
-        }
+        fitVisible();
       },
     });
 
     // Re-fit on container resize. `ResizeObserver` covers the drag handle and
     // the sidebar toggle without the parent having to forward events.
-    const ro = new ResizeObserver(() => {
-      try {
-        fit.fit();
-        onResizeRef.current(term.cols, term.rows);
-      } catch {
-        /* ignore */
-      }
-    });
+    const ro = new ResizeObserver(fitVisible);
     ro.observe(host);
 
     // Follow theme switches. The app writes `data-theme` on <html>, so watch
@@ -297,6 +284,25 @@ export default function TerminalOutput({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // A hidden panel stays mounted to retain output, but has no geometry to fit.
+  // Refit once it is visible again so both xterm and the PTY use the real size.
+  useLayoutEffect(() => {
+    if (!visible) return;
+    const id = requestAnimationFrame(() => {
+      const host = hostRef.current;
+      const term = termRef.current;
+      if (!host || !term || host.clientWidth <= 0 || host.clientHeight <= 0) return;
+      try {
+        fitRef.current?.fit();
+        term.refresh(0, Math.max(0, term.rows - 1));
+        onResizeRef.current(term.cols, term.rows);
+      } catch {
+        /* host not laid out yet */
+      }
+    });
+    return () => cancelAnimationFrame(id);
+  }, [visible]);
+
   // Font changes are a live option update, not a rebuild.
   useLayoutEffect(() => {
     fontSizeRef.current = { fontSize, fontFamily };
@@ -304,6 +310,8 @@ export default function TerminalOutput({
     if (!term) return;
     term.options.fontSize = fontSize;
     term.options.fontFamily = fontFamily;
+    const host = hostRef.current;
+    if (!visibleRef.current || !host || host.clientWidth <= 0 || host.clientHeight <= 0) return;
     try {
       fitRef.current?.fit();
       onResizeRef.current(term.cols, term.rows);
@@ -312,5 +320,5 @@ export default function TerminalOutput({
     }
   }, [fontSize, fontFamily]);
 
-  return <div ref={hostRef} tabIndex={-1} className="w-full h-full outline-none" />;
+  return <div ref={hostRef} data-terminal-output="" tabIndex={-1} className="w-full h-full outline-none" />;
 }

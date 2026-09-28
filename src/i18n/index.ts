@@ -111,11 +111,16 @@ const en: Dict = {
   "output.selectAll": "Select All",
   "output.clear": "Clear",
   "output.stop": "Stop",
+  "output.ctrlCTitle": "Send Ctrl+C to the terminal: stops what is running and leaves the prompt usable",
   "output.closeTitle": "Close output",
   "output.none": "No output.",
   "output.empty": "Run a file to see its output here.",
   "output.running": "Running…",
   "output.stopped": "Stopped",
+  "output.logTitle": "Open this run's complete output in the editor — {path} ({lines} lines)",
+  "output.truncatedCap":
+    "The panel keeps only the last {max} lines. This run's complete output ({total} lines) is in its log file — click to open it.",
+  "output.truncatedNoLog": "The panel keeps only the last {max} lines; earlier output was not kept.",
   "output.exited": "exited {code}",
   "output.exitCode": "Exited with code {code}",
   "output.workingDir": "Running in: {dir}",
@@ -128,9 +133,21 @@ const en: Dict = {
   "output.terminal.on": "Terminal: on",
   "output.terminal.off": "Terminal: off",
   "output.terminal.onTitle":
-    "Output is a real terminal: live streaming, colours, progress bars and keyboard interaction",
+    "A terminal is open: runs happen inside it, and the prompt stays usable for commands of your own",
   "output.terminal.offTitle":
-    "Output is plain text. Switch the terminal back on for colours and live progress bars",
+    "No terminal is open, so output is plain text. Switch it on for a command line, plus colours and live progress bars",
+  "output.shellClose": "Close",
+  "output.shellCloseTitle": "End the shell session, and everything started in it",
+  "output.shellRestart": "Restart",
+  "output.shellRestartTitle": "Start this shell again",
+  "output.shellBanner": "{name} — working directory: {dir}",
+  "output.shellBannerNoDir": "{name} — working directory: the app's own folder.",
+
+  "shell.powershell": "PowerShell",
+  "shell.cmd": "Command Prompt",
+  "shell.bash": "Bash",
+  "shell.zsh": "Zsh",
+  "shell.sh": "sh",
 
   "run.desktopOnly": "Running files only works in the desktop app.",
   "run.in": "Running in: {dir}",
@@ -230,6 +247,10 @@ const en: Dict = {
   "settings.terminal": "Terminal output",
   "settings.terminal.hint":
     "Runs programmes in a real terminal instead of a plain pipe. Output streams line by line as it is produced, and ANSI colours, progress bars and keyboard prompts (e.g. tqdm, rich) work the way they do in a terminal window. Turn this off if a script prints raw escape codes that look wrong here.",
+  "settings.shell": "Default shell",
+  "settings.shellAuto": "Automatic (first available)",
+  "settings.shell.hint":
+    "The interactive shell the Output panel opens. It starts in the project folder and keeps running while you run files, so a long install is not interrupted.",
   "settings.runIn.hintLead": "Working directory handed to scripts you run, so relative paths like ",
   "settings.runIn.hintTail":
     " resolve predictably. Falls back to the script's own folder when the chosen directory is unavailable.",
@@ -368,11 +389,16 @@ const zh: Dict = {
   "output.selectAll": "全选",
   "output.clear": "清空",
   "output.stop": "停止",
+  "output.ctrlCTitle": "向终端发送 Ctrl+C：中断正在运行的程序，提示符仍可继续使用",
   "output.closeTitle": "关闭输出",
   "output.none": "暂无输出。",
   "output.empty": "运行文件后，输出会显示在这里。",
   "output.running": "运行中…",
   "output.stopped": "已停止",
+  "output.logTitle": "在编辑器中打开本次运行的完整输出 —— {path}（{lines} 行）",
+  "output.truncatedCap":
+    "面板只保留最近 {max} 行。本次运行的完整输出（{total} 行）已写入日志文件 —— 点击打开。",
+  "output.truncatedNoLog": "面板只保留最近 {max} 行，更早的输出未保留。",
   "output.exited": "已退出（{code}）",
   "output.exitCode": "退出码 {code}",
   "output.workingDir": "运行目录：{dir}",
@@ -384,8 +410,20 @@ const zh: Dict = {
   "output.sendTitle": "把这一行发送到程序的标准输入",
   "output.terminal.on": "终端：开",
   "output.terminal.off": "终端：关",
-  "output.terminal.onTitle": "输出走真实终端：实时流式、彩色、进度条、可键盘交互",
-  "output.terminal.offTitle": "输出为纯文本。重新打开终端可看到颜色与实时进度条",
+  "output.terminal.onTitle": "终端已打开：运行就在这个终端里执行，跑完还能在提示符上继续敲自己的命令",
+  "output.terminal.offTitle": "未打开终端，输出为纯文本。打开终端即可获得命令行，以及颜色与实时进度条",
+  "output.shellClose": "关闭",
+  "output.shellCloseTitle": "结束 Shell 会话，以及在其中启动的所有进程",
+  "output.shellRestart": "重启",
+  "output.shellRestartTitle": "重新启动这个 Shell",
+  "output.shellBanner": "{name} —— 工作目录：{dir}",
+  "output.shellBannerNoDir": "{name} —— 工作目录：应用自身所在目录。",
+
+  "shell.powershell": "PowerShell",
+  "shell.cmd": "命令提示符（cmd）",
+  "shell.bash": "Bash",
+  "shell.zsh": "Zsh",
+  "shell.sh": "sh",
 
   "run.desktopOnly": "运行功能仅在桌面版应用中可用。",
   "run.in": "运行目录：{dir}",
@@ -485,6 +523,10 @@ const zh: Dict = {
   "settings.terminal": "终端输出",
   "settings.terminal.hint":
     "在真实终端里运行程序，而不是普通管道。输出会边产生边逐行显示，ANSI 颜色、进度条以及需要键盘输入的程序（如 tqdm、rich）都和终端窗口里表现一致。若某个脚本在这里显示成乱码转义字符，可以关掉这个开关。",
+  "settings.shell": "默认 Shell",
+  "settings.shellAuto": "自动（第一个可用）",
+  "settings.shell.hint":
+    "输出面板打开的交互式 Shell。它在项目文件夹中启动，运行文件时不会被中断，所以长时间的安装不会被误杀。",
   "settings.runIn.hintLead": "运行脚本时使用的工作目录，让 ",
   "settings.runIn.hintTail": " 这类相对路径有确定的解析位置。若所选目录不可用，会回退到脚本自身所在目录。",
 

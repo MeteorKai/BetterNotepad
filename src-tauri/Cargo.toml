@@ -1,6 +1,6 @@
 [package]
 name = "notepad-app"
-version = "0.4.3"
+version = "0.4.4"
 description = "A beautiful notepad application"
 authors = ["you"]
 edition = "2021"
@@ -20,6 +20,10 @@ tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 encoding_rs = "0.8"
+# Local wall-clock time for run-log file names, so a directory listing reads as
+# a timeline. Already in the tree as a transitive dependency, so declaring it
+# directly costs nothing extra to build.
+chrono = "0.4"
 tauri-plugin-opener = "2"
 # Pseudo-terminal for the "run in a real terminal" output mode. Gives the child
 # a ConPTY on Windows / openpty elsewhere, so it stops block-buffering and emits

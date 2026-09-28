@@ -1,5 +1,7 @@
+mod blanksweep;
 mod commands;
 mod pty;
+mod runlog;
 mod shell_menu;
 
 use tauri::{Emitter, Manager};
@@ -41,6 +43,7 @@ pub fn run() {
         .manage(commands::RunState::default())
         .manage(commands::StdinState::default())
         .manage(pty::PtyState::default())
+        .manage(runlog::RunLogs::default())
         .invoke_handler(tauri::generate_handler![
             commands::read_file,
             commands::write_file,
@@ -53,6 +56,7 @@ pub fn run() {
             commands::create_file,
             commands::create_folder,
             commands::detect_interpreters,
+            commands::detect_shells,
             commands::run_program,
             commands::stop_program,
             commands::write_stdin,

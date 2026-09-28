@@ -328,6 +328,19 @@ body {
   background: var(--match-current-bg);
 }
 
+/* Transcript rows opt out of layout and paint while they are off-screen.
+   The list is not virtualised, so without this a run long enough to fill
+   MAX_OUTPUT_LINES costs the browser a pass over every row on each scroll and
+   each resize; with it the cost tracks what is actually on screen.
+   `contain-intrinsic-size` gives a row that has never been rendered a height to
+   stand in with (12px text at 1.5 line height) and `auto` remembers the real one
+   afterwards, which is what keeps the scrollbar from jumping as rows come into
+   view. */
+.output-text > div {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 18px;
+}
+
 /* =====================================================================
    Bracket pair highlight (CodeMirror's `bracketMatching`)
    The base theme styles these as `&.cm-focused .cm-matchingBracket`, i.e.

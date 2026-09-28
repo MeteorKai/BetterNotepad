@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { InterpreterConfig } from "../hooks/useRunner";
+import type { InterpreterConfig, ShellInfo } from "../hooks/useRunner";
 import { t, type LocaleSetting } from "../i18n";
 import {
   FONT_OPTIONS,
@@ -15,6 +15,8 @@ interface SettingsDialogProps {
   onSet: (language: string, patch: Partial<InterpreterConfig>) => void;
   onApplyDetected: () => void;
   editorSettings: EditorSettings;
+  /** Interactive shells the backend found, for the default-shell picker. */
+  shells: ShellInfo[];
   onSetEditor: (
     patch: Partial<EditorSettings> | ((prev: EditorSettings) => Partial<EditorSettings>)
   ) => void;
@@ -95,9 +97,12 @@ function Toggle({
 function EditorSettingsPanel({
   settings,
   onSet,
+  shells,
 }: {
   settings: EditorSettings;
   onSet: (patch: Partial<EditorSettings>) => void;
+  /** Interactive shells the backend found, for the default-shell picker. */
+  shells: ShellInfo[];
 }) {
   const browseCwd = async () => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -193,6 +198,33 @@ function EditorSettingsPanel({
         <p className="text-[11px] text-faint leading-relaxed">
           {t("settings.terminal.hint")}
         </p>
+      </div>
+
+      <div className="pt-3 border-t border-line-soft space-y-1.5">
+        <Row label={t("settings.shell")}>
+          <select
+            // A stored shell that this machine does not have reads back as
+            // "automatic": showing an entry that is not in the list would leave
+            // the select blank with no way to explain itself.
+            value={
+              shells.some((s) => s.id === settings.defaultShell && s.available)
+                ? settings.defaultShell
+                : ""
+            }
+            onChange={(e) => onSet({ defaultShell: e.target.value })}
+            className="min-w-[220px] bg-surface text-ink px-2 py-1 rounded-md border border-line outline-none focus:border-accent text-sm transition-colors"
+          >
+            <option value="">{t("settings.shellAuto")}</option>
+            {shells
+              .filter((s) => s.available)
+              .map((s) => (
+                <option key={s.id} value={s.id}>
+                  {t(`shell.${s.id}`)}
+                </option>
+              ))}
+          </select>
+        </Row>
+        <p className="text-[11px] text-faint leading-relaxed">{t("settings.shell.hint")}</p>
       </div>
 
       <div className="pt-3 border-t border-line-soft space-y-3">
@@ -319,6 +351,7 @@ export default function SettingsDialog({
   onSet,
   onApplyDetected,
   editorSettings,
+  shells,
   onSetEditor,
   onClose,
 }: SettingsDialogProps) {
@@ -419,6 +452,7 @@ export default function SettingsDialog({
             <EditorSettingsPanel
               settings={editorSettings}
               onSet={(patch) => onSetEditor(patch)}
+              shells={shells}
             />
           ) : tab === "about" ? (
             <AboutPanel

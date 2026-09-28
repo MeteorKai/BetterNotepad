@@ -4,9 +4,12 @@ use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
+
+use crate::runlog::{self, RunLog, RunLogInfo};
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
@@ -269,8 +272,26 @@ pub fn create_folder(parent: String, name: String) -> Result<String, String> {
 // Built-in code runner
 // =====================================================================
 
+/// One live piped run: the child, plus the two flags the output pump and the
+/// exit watcher use to hand the tail over cleanly.
+///
+/// The flags live here rather than in the spawning thread's stack because the
+/// run does not always end there. Pressing Stop tears the process down from an
+/// IPC handler, and it has to be able to wait for the pump the same way the
+/// watcher does — otherwise the log it reports would be missing whatever the
+/// child wrote just before it died.
+pub struct RunEntry {
+    child: Child,
+    /// Set once the child is known to be gone, by whichever thread notices
+    /// first. The pump only flushes its tail after this.
+    exited: Arc<AtomicBool>,
+    /// Set by the pump once the tail has been handed over. The exit event waits
+    /// for this so the last lines cannot land behind it and be dropped.
+    pump_done: Arc<AtomicBool>,
+}
+
 #[derive(Default)]
-pub struct RunState(pub Mutex<HashMap<String, Child>>);
+pub struct RunState(pub Mutex<HashMap<String, RunEntry>>);
 
 // stdin is kept apart from the `Child` because the child handle is moved into
 // `RunState` while the stdout/stderr reader threads run: whoever holds the
@@ -305,17 +326,48 @@ pub struct InterpreterInfo {
     pub available: bool,
 }
 
+/// One line of program output, as carried inside a [`RunLines`] batch.
 #[derive(Clone, Serialize)]
 pub struct RunLine {
-    pub id: String,
     pub stream: String,
     pub line: String,
 }
+
+/// Payload of the `run://output` event: every line the program printed since
+/// the previous batch.
+///
+/// Batched instead of one event per line because every `emit` costs a
+/// `webview.eval` that Tauri posts to the *main thread* (see
+/// [`OUTPUT_FLUSH_MS`]) — the same thread that has to keep answering the
+/// window's messages. One event per line means a program printing thousands of
+/// lines a second fills that queue faster than it drains, and the window stops
+/// responding: it cannot be dragged, menus do not open, and Windows marks it
+/// as not responding.
+#[derive(Clone, Serialize)]
+pub struct RunLines {
+    pub id: String,
+    pub lines: Vec<RunLine>,
+}
+
+/// How long the output pump waits before flushing what it has buffered.
+///
+/// This is the cap on how much IPC a run can generate: at most one event per
+/// interval, whatever the program's output rate. 60 ms is well below the
+/// threshold where a human notices latency, and it cuts a chatty run from
+/// thousands of main-thread messages per second to ~16.
+const OUTPUT_FLUSH_MS: u64 = 60;
+
+/// Ceiling on one batch, so a sudden burst cannot build a single huge event.
+const OUTPUT_FLUSH_MAX_LINES: usize = 400;
 
 #[derive(Clone, Serialize)]
 pub struct RunExit {
     pub id: String,
     pub code: Option<i32>,
+    /// The complete output of this run, on disk. `None` only when the log file
+    /// could not be created. The panel is capped, this is not, so the path is
+    /// how output survives a script that prints more than the panel can show.
+    pub log: Option<RunLogInfo>,
 }
 
 const LANGUAGE_PRESETS: &[(&str, &[&str], &[&str])] = &[
@@ -380,7 +432,126 @@ pub fn detect_interpreters() -> Vec<InterpreterInfo> {
         .collect()
 }
 
+// ---------------------------------------------------------------------------
+// Interactive shells
+// ---------------------------------------------------------------------------
+
+/// One interactive shell the output panel can offer.
+///
+/// `command` is the resolved absolute path when the shell exists and the bare
+/// name when it does not; the frontend keys on `available`, so the placeholder
+/// is never spawned.
+#[derive(Clone, Serialize)]
+pub struct ShellInfo {
+    /// Stable id used as the user's stored preference (`cmd`, `powershell`, …).
+    pub id: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub available: bool,
+}
+
+/// Shell candidates, most preferred first.
+///
+/// `pwsh` sits ahead of Windows PowerShell because the two are the same engine:
+/// a machine with PowerShell 7 installed wants it, and one without falls
+/// through to the copy that ships with Windows. `cmd.exe` is always present.
+#[cfg(windows)]
+const SHELL_PRESETS: &[(&str, &[&str])] = &[
+    ("powershell", &["pwsh.exe", "powershell.exe"]),
+    ("cmd", &["cmd.exe"]),
+    ("bash", &["bash.exe"]),
+];
+
+#[cfg(not(windows))]
+const SHELL_PRESETS: &[(&str, &[&str])] = &[
+    ("bash", &["bash"]),
+    ("zsh", &["zsh"]),
+    ("sh", &["sh"]),
+];
+
+/// Which interactive shells this machine can actually start.
+///
+/// Same PATH lookup and same payload shape as [`detect_interpreters`], so the
+/// frontend can grey out what is missing instead of offering a button whose
+/// only outcome is a spawn error.
 #[tauri::command]
+pub fn detect_shells() -> Vec<ShellInfo> {
+    SHELL_PRESETS
+        .iter()
+        .map(|(id, candidates)| {
+            let found = candidates.iter().find_map(|c| find_command(c));
+            ShellInfo {
+                id: id.to_string(),
+                command: found.clone().unwrap_or_else(|| candidates[0].to_string()),
+                // Interactive: no `-c`, no script. The shell reads the PTY.
+                args: Vec::new(),
+                available: found.is_some(),
+            }
+        })
+        .collect()
+}
+
+/// Drain one of the child's pipes, one line at a time, into `pending`.
+///
+/// Generic over the reader so stdout and stderr — different concrete types —
+/// share the code. The thread ends at EOF, which is how the pump below learns
+/// that no further lines can arrive.
+///
+/// Every line also goes to the run's log, and it goes there *before* it joins
+/// the batch below. That order is the whole guarantee: the batch is bounded and
+/// may be dropped or trimmed by the frontend, while the log is the record.
+fn collect_output<R: std::io::Read + Send + 'static>(
+    source: R,
+    stream: &'static str,
+    pending: Arc<Mutex<Vec<RunLine>>>,
+    readers_left: Arc<AtomicUsize>,
+    log: Option<Arc<RunLog>>,
+) {
+    std::thread::spawn(move || {
+        for line in BufReader::new(source).lines() {
+            let Ok(line) = line else { break };
+            if let Some(log) = &log {
+                log.write_line(&line);
+            }
+            match pending.lock() {
+                Ok(mut buffer) => buffer.push(RunLine {
+                    stream: stream.into(),
+                    line,
+                }),
+                Err(_) => break,
+            }
+        }
+        readers_left.fetch_sub(1, Ordering::SeqCst);
+    });
+}
+
+/// Hand everything buffered for `id` to the frontend as a single event.
+///
+/// Draining under the lock is what keeps batches in order: only the pump thread
+/// calls this, and the lock decides which lines go into which batch.
+fn flush_output(app: &AppHandle, id: &str, pending: &Arc<Mutex<Vec<RunLine>>>) {
+    let lines = {
+        let Ok(mut buffer) = pending.lock() else {
+            return;
+        };
+        if buffer.is_empty() {
+            return;
+        }
+        std::mem::take(&mut *buffer)
+    };
+    let _ = app.emit(
+        "run://output",
+        RunLines {
+            id: id.to_string(),
+            lines,
+        },
+    );
+}
+
+// Runs off the main thread on purpose: `#[tauri::command(async)]` puts the body
+// on the async runtime rather than the thread driving the window, so the IPC
+// that starts a run can never hold up a repaint or a window drag.
+#[tauri::command(async)]
 pub fn run_program(
     app: AppHandle,
     id: String,
@@ -423,13 +594,26 @@ pub fn run_program(
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
 
+    // `process_exited` is raised by whoever sees the child go; `pump_done` comes
+    // back once the tail has been flushed, which is what lets the exit event
+    // report the status *after* the last line instead of racing it.
+    let process_exited = Arc::new(AtomicBool::new(false));
+    let pump_done = Arc::new(AtomicBool::new(false));
+
     {
         let state = app.state::<RunState>();
         let mut map = state.0.lock().unwrap();
         if map.contains_key(&id) {
             return Err("A process with this id is already running".into());
         }
-        map.insert(id.clone(), child);
+        map.insert(
+            id.clone(),
+            RunEntry {
+                child,
+                exited: process_exited.clone(),
+                pump_done: pump_done.clone(),
+            },
+        );
     }
 
     if let Some(stdin) = stdin {
@@ -438,39 +622,64 @@ pub fn run_program(
         map.insert(id.clone(), Arc::new(Mutex::new(stdin)));
     }
 
+    // The complete output goes to a file as well as to the panel. The panel is
+    // capped, so a script printing more lines than it can hold would otherwise
+    // have its early output become unreadable for good; the log has no cap.
+    // Registered by id so `stop_program` can hand the path back for a run it
+    // has to kill.
+    let log = app.state::<runlog::RunLogs>().start(&app, &id);
+
+    // Output is funnelled through one buffer drained by one pump thread, so a
+    // run costs at most one IPC event per OUTPUT_FLUSH_MS no matter how loudly
+    // it prints. See RunLines for why that matters.
+    let pending: Arc<Mutex<Vec<RunLine>>> = Arc::new(Mutex::new(Vec::new()));
+    let readers_left = Arc::new(AtomicUsize::new(0));
     if let Some(out) = stdout {
-        let app2 = app.clone();
-        let id2 = id.clone();
-        std::thread::spawn(move || {
-            for line in BufReader::new(out).lines() {
-                if let Ok(line) = line {
-                    let _ = app2.emit(
-                        "run://output",
-                        RunLine {
-                            id: id2.clone(),
-                            stream: "stdout".into(),
-                            line,
-                        },
-                    );
-                }
-            }
-        });
+        readers_left.fetch_add(1, Ordering::SeqCst);
+        collect_output(out, "stdout", pending.clone(), readers_left.clone(), log.clone());
+    }
+    if let Some(err) = stderr {
+        readers_left.fetch_add(1, Ordering::SeqCst);
+        collect_output(err, "stderr", pending.clone(), readers_left.clone(), log.clone());
     }
 
-    if let Some(err) = stderr {
+    {
         let app2 = app.clone();
         let id2 = id.clone();
+        let pending2 = pending.clone();
+        let readers2 = readers_left.clone();
+        let exited2 = process_exited.clone();
+        let done2 = pump_done.clone();
         std::thread::spawn(move || {
-            for line in BufReader::new(err).lines() {
-                if let Ok(line) = line {
-                    let _ = app2.emit(
-                        "run://output",
-                        RunLine {
-                            id: id2.clone(),
-                            stream: "stderr".into(),
-                            line,
-                        },
-                    );
+            let interval = Duration::from_millis(OUTPUT_FLUSH_MS);
+            let mut since_flush = Duration::ZERO;
+            let mut give_up_at: Option<Instant> = None;
+            loop {
+                // Short hops rather than one long sleep: a burst that outgrows
+                // a single batch should not have to wait for the next tick.
+                std::thread::sleep(Duration::from_millis(10));
+                since_flush += Duration::from_millis(10);
+                let buffered = pending2.lock().map(|b| b.len()).unwrap_or(0);
+                if buffered > 0
+                    && (since_flush >= interval || buffered >= OUTPUT_FLUSH_MAX_LINES)
+                {
+                    flush_output(&app2, &id2, &pending2);
+                    since_flush = Duration::ZERO;
+                }
+                if !exited2.load(Ordering::SeqCst) {
+                    continue;
+                }
+                // The process is gone. Keep draining until both pipes have hit
+                // EOF so the last lines cannot land behind the exit event and
+                // get dropped by the frontend. A grandchild can hold a pipe
+                // open indefinitely, hence the deadline.
+                let all_readers_done = readers2.load(Ordering::SeqCst) == 0;
+                let deadline = *give_up_at
+                    .get_or_insert_with(|| Instant::now() + Duration::from_millis(600));
+                if all_readers_done || Instant::now() >= deadline {
+                    flush_output(&app2, &id2, &pending2);
+                    done2.store(true, Ordering::SeqCst);
+                    break;
                 }
             }
         });
@@ -481,7 +690,7 @@ pub fn run_program(
         let state = app2.state::<RunState>();
         let mut map = state.0.lock().unwrap();
         match map.get_mut(&id) {
-            Some(child) => match child.try_wait() {
+            Some(entry) => match entry.child.try_wait() {
                 Ok(Some(status)) => {
                     let code = status.code();
                     map.remove(&id);
@@ -491,11 +700,22 @@ pub fn run_program(
                     if let Ok(mut stdin_map) = app2.state::<StdinState>().0.lock() {
                         stdin_map.remove(&id);
                     }
+                    process_exited.store(true, Ordering::SeqCst);
+                    // Let the pump flush the tail first: output that arrives
+                    // after the exit event is ignored by the frontend.
+                    let deadline = Instant::now() + Duration::from_millis(1200);
+                    while !pump_done.load(Ordering::SeqCst) && Instant::now() < deadline {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
+                    // Flushed by the pump's wait above, so the file is complete
+                    // by the time the panel offers to open it.
+                    let log = runlog::finish(&app2, &id);
                     let _ = app2.emit(
                         "run://exit",
                         RunExit {
                             id: id.clone(),
                             code,
+                            log,
                         },
                     );
                     break;
@@ -510,35 +730,62 @@ pub fn run_program(
                     if let Ok(mut stdin_map) = app2.state::<StdinState>().0.lock() {
                         stdin_map.remove(&id);
                     }
+                    // Nothing left to report, but the pump still has to be told
+                    // to stop or the thread outlives the run.
+                    process_exited.store(true, Ordering::SeqCst);
                     break;
                 }
             },
-            None => break,
+            // The entry is gone, so someone else ended this run — in practice
+            // that is only `stop_program`, which reports the exit itself. Tell
+            // the pump anyway: `exited` is the only thing that stops it, and a
+            // pump left spinning would hold the pending buffer and the app
+            // handle for the rest of the session.
+            None => {
+                process_exited.store(true, Ordering::SeqCst);
+                break;
+            }
         }
     });
 
     Ok(())
 }
 
-#[tauri::command]
+/// Kill a running program and report its exit.
+///
+/// Off the main thread on purpose: this waits for the output tail (see below),
+/// and a window that cannot repaint while the user clicks Stop is the same
+/// freeze [`run_program`] avoids with the same attribute.
+#[tauri::command(async)]
 pub fn stop_program(app: AppHandle, id: String) -> Result<(), String> {
-    {
+    let entry = {
         let state = app.state::<RunState>();
         let mut map = state.0.lock().unwrap();
-        if let Some(child) = map.get_mut(&id) {
-            let _ = child.kill();
-            let _ = child.wait();
-            map.remove(&id);
+        map.remove(&id)
+    };
+    if let Some(mut entry) = entry {
+        let _ = entry.child.kill();
+        let _ = entry.child.wait();
+        // The watcher is not the thread ending this run, so nothing else would
+        // tell the pump to stop. Raising `exited` first, then waiting for the
+        // tail, is what makes the log below complete: the readers are still
+        // draining whatever the child wrote before it was killed.
+        entry.exited.store(true, Ordering::SeqCst);
+        let deadline = Instant::now() + Duration::from_millis(600);
+        while !entry.pump_done.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
     if let Ok(mut stdin_map) = app.state::<StdinState>().0.lock() {
         stdin_map.remove(&id);
     }
+    let log = runlog::finish(&app, &id);
     let _ = app.emit(
         "run://exit",
         RunExit {
             id: id.clone(),
             code: None,
+            log,
         },
     );
     Ok(())

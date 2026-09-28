@@ -34,6 +34,15 @@ export interface EditorSettings {
    * escape-code-mangling script may need.
    */
   terminalMode: boolean;
+  /**
+   * Which interactive shell the output panel starts when the user opens one.
+   *
+   * Stored as the id the backend reports (`powershell`, `cmd`, …). The empty
+   * string means "whichever one this machine has first", which is the only
+   * value that stays correct across platforms — `cmd.exe` does not exist on
+   * Linux, and `powershell.exe` need not exist on Windows either.
+   */
+  defaultShell: string;
 }
 
 export const FONT_OPTIONS: { label: string; value: string }[] = [
@@ -61,6 +70,7 @@ const DEFAULTS: EditorSettings = {
   contextMenu: true,
   bracketMatching: true,
   terminalMode: true,
+  defaultShell: "",
 };
 
 function clampInt(v: unknown, min: number, max: number, fallback: number): number {
@@ -95,6 +105,8 @@ function loadSettings(): EditorSettings {
         typeof p.bracketMatching === "boolean" ? p.bracketMatching : DEFAULTS.bracketMatching,
       terminalMode:
         typeof p.terminalMode === "boolean" ? p.terminalMode : DEFAULTS.terminalMode,
+      defaultShell:
+        typeof p.defaultShell === "string" ? p.defaultShell : DEFAULTS.defaultShell,
     };
   } catch {
     return DEFAULTS;

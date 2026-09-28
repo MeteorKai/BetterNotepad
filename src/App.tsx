@@ -156,6 +156,7 @@ function App() {
   const runner = useRunner();
 
   const [outputOpen, setOutputOpen] = useState(false);
+  const [outputMounted, setOutputMounted] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [aboutOpen, setAboutOpen] = useState(false);
   const [selectionLen, setSelectionLen] = useState(0);
@@ -480,8 +481,79 @@ function App() {
     }
     setOutputOpen(true);
     const { dir, hint } = resolveRunCwd(filePath);
+    // Terminal mode runs the file inside the interactive shell, so the command
+    // is visible and echoed the way something typed at a prompt is, and what is
+    // left behind afterwards is a usable prompt rather than a dead pane. A
+    // machine with no shell falls through to the older path below.
+    if (
+      editorSettings.terminalMode &&
+      (await runner.runInShell(
+        editorSettings.defaultShell,
+        conf.command,
+        conf.args,
+        filePath,
+        dir,
+        hint
+      ))
+    ) {
+      return;
+    }
     await runner.run(conf.command, conf.args, filePath, dir, hint, editorSettings.terminalMode);
-  }, [runner, activeTab, saveTabData, resolveRunCwd, editorSettings.terminalMode]);
+  }, [
+    runner,
+    activeTab,
+    saveTabData,
+    resolveRunCwd,
+    editorSettings.terminalMode,
+    editorSettings.defaultShell,
+  ]);
+
+  // An interactive shell starts in the directory a run would use, so the common
+  // case — working inside the open folder — needs no `cd` to get going.
+  const handleOpenShell = useCallback(
+    (kind: string) => {
+      const { dir } = resolveRunCwd(activeTab.filePath ?? "");
+      setOutputOpen(true);
+      void runner.openShell(kind, dir);
+    },
+    [runner, activeTab.filePath, resolveRunCwd]
+  );
+
+  /**
+   * Turn the terminal on or off.
+   *
+   * On means "give me a terminal", not merely "the next run should use one":
+   * with the Shell launch button gone, closing a shell would otherwise leave no
+   * way back to a prompt except running a file, which is not what a user who
+   * just wants a command line is doing.
+   *
+   * A session that already exists is left untouched — toggling the mode off and
+   * on again must not kill whatever is running inside it.
+   */
+  const handleSetTerminalMode = useCallback(
+    (terminalMode: boolean) => {
+      setEditorSettings({ terminalMode });
+      if (terminalMode && !runner.shell) {
+        handleOpenShell(editorSettings.defaultShell);
+      }
+    },
+    [setEditorSettings, runner.shell, handleOpenShell, editorSettings.defaultShell]
+  );
+
+  /**
+   * Close the shell — and the terminal with it.
+   *
+   * The switch is the panel's one claim about whether a terminal is open, so
+   * dropping the session has to drop the claim as well. Leaving the switch on
+   * with nothing behind it is the same mismatch as the one this replaced (a
+   * panel showing a shell while the header said there was no terminal), only
+   * the other way round: the switch would promise a command line that is not
+   * there, and runs would keep being handed to a session that no longer exists.
+   */
+  const handleCloseShell = useCallback(() => {
+    setEditorSettings({ terminalMode: false });
+    void runner.closeShell();
+  }, [setEditorSettings, runner.closeShell]);
 
   const handleOpenSearchResult = useCallback((path: string, line: number) => {
     revealLineRef.current = { path, line };
@@ -510,6 +582,15 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof Element && e.target.closest("[data-terminal-output]")) {
+        const key = e.key.toLowerCase();
+        const zoomKey =
+          (e.ctrlKey || e.metaKey) &&
+          !e.altKey &&
+          !e.getModifierState("AltGraph") &&
+          (key === "+" || key === "=" || key === "-" || key === "0");
+        if (!zoomKey) return;
+      }
       if (e.ctrlKey || e.metaKey) {
         switch (e.key.toLowerCase()) {
           case "n":
@@ -820,14 +901,19 @@ function App() {
           </div>
         </div>
       </div>
-      {outputOpen && (
+      {(outputOpen || outputMounted) && (
         <OutputPanel
+          visible={outputOpen}
           output={runner.output}
           running={runner.running}
           lastExit={runner.lastExit}
           onClear={runner.clearOutput}
           onStop={runner.stop}
-          onClose={() => setOutputOpen(false)}
+          onClose={() => {
+            setOutputMounted(true);
+            setOutputOpen(false);
+            editorRef.current?.focusEditor();
+          }}
           height={outputHeight}
           onResize={handleOutputDrag}
           onSendInput={runner.sendInput}
@@ -836,12 +922,20 @@ function App() {
           onTerminalResize={runner.resizeTerminal}
           onAppendLines={runner.appendLines}
           onSetTranscript={runner.setTranscript}
+          onOpenLog={(path) => void openPaths([path])}
           terminalMode={editorSettings.terminalMode}
-          onSetTerminalMode={(terminalMode) => setEditorSettings({ terminalMode })}
+          onSetTerminalMode={handleSetTerminalMode}
           fontSize={editorSettings.fontSize}
           fontFamily={editorSettings.fontFamily}
           inputHistory={inputHistory}
           onRememberInput={rememberInput}
+          shell={runner.shell}
+          onOpenShell={handleOpenShell}
+          onCloseShell={handleCloseShell}
+          onShellInput={runner.sendShellInput}
+          onAttachShell={runner.attachShell}
+          onShellSnapshot={runner.rememberShellSnapshot}
+          onShellResize={runner.resizeShell}
         />
       )}
       <StatusBar
@@ -901,6 +995,7 @@ function App() {
           config={runner.config}
           onSet={runner.setInterpreter}
           onApplyDetected={runner.applyDetected}
+          shells={runner.shells}
           editorSettings={editorSettings}
           onSetEditor={setEditorSettings}
           onClose={() => setSettingsOpen(false)}
