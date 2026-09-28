@@ -1,171 +1,90 @@
-# BetterNotepad
-
-一个基于 **Tauri 2** 的现代化桌面记事本，同时是一把趁手的轻量代码编辑器。
-
-总而言之：**涵盖系统记事本和 Notepad++ 的绝大部分功能，且界面更为美观舒适。**
-
-Windows 安装包即装即用，无需任何配置。
-
----
-
-## 为什么选择 BetterNotepad？
-
-| 能力 | 系统记事本 | Notepad++ | **BetterNotepad** |
-|---|---|---|---|
-| 界面 | 简陋 | 老式 | 现代美观，三套主题（Light / Dark / Warm） |
-| 多标签 | ✗ | ✓ | ✓ 支持**拖拽排序**、双击重命名 |
-| 语法高亮 | ✗ | ✓ | ✓ 30+ 种语言，按扩展名自动识别 |
-| 正则查找 / 替换 | ✗ | ✓ | ✓ 支持模式匹配与 `$1` 捕获组替换 |
-| 编码识别 | 部分 | ✓ | ✓ UTF-8 / GBK / UTF-16 自动探测，可转换 |
-| 崩溃恢复 | ✗ | 部分 | ✓ 自动恢复未保存的内容 |
-| Markdown 实时预览 | ✗ | ✗ | ✓ 分栏实时预览，带代码高亮 |
-| 直接运行代码 | ✗ | 需插件 | ✓ 内置解释器运行 + 输出面板 |
-| 跨文件搜索 | ✗ | ✓ | ✓ 一键搜索整个文件夹 |
-| 文件管理 | ✗ | 需插件 | ✓ 内置文件树，新建/重命名/删除 |
-| 行尾 / 编码切换 | ✗ | ✓ | ✓ LF / CRLF，混合行尾自动修复 |
-| 检查更新 | ✗ | ✗ | ✓ 应用内一键跳转 GitHub 查看新版本 |
-| 3D 看板娘 | ✗ | ✗ | ✓ 可拖拽互动的可爱看板娘 |
-
-**一句话**：打开即用、界面现代、功能完整的记事本 + 轻量 IDE 合体。
+<div align="center">
+  <img src="src-tauri/icons/128x128.png" width="96" alt="BetterNotepad 图标" />
+  <h1>BetterNotepad</h1>
+  <p><strong>写得轻松，改得顺手。</strong></p>
+  <p>写笔记、改配置、预览 Markdown、运行脚本，在一个窗口里完成。</p>
+  <p>
+    <a href="https://github.com/MeteorKai/BetterNotepad/releases"><img src="https://img.shields.io/github/v/release/MeteorKai/BetterNotepad?label=release" alt="最新版本" /></a>
+    <img src="https://img.shields.io/badge/Windows-x64-0078D6?logo=windows&amp;logoColor=white" alt="Windows x64" />
+    <img src="https://img.shields.io/badge/Tauri-2-24C8D8?logo=tauri&amp;logoColor=white" alt="Tauri 2" />
+  </p>
+  <p>
+    <a href="https://github.com/MeteorKai/BetterNotepad/releases"><strong>⬇ 下载 Windows 安装包</strong></a>
+    · <a href="#功能亮点">功能亮点</a>
+    · <a href="#从源码运行">从源码运行</a>
+  </p>
+</div>
 
 ---
+
+BetterNotepad 是一款面向 **Windows** 的文本与轻量代码编辑器。它把日常编辑放在第一位：打开就能写；需要查找项目内容、预览 Markdown 或运行脚本时，也不用换工具。
+
+> 不是把一整套 IDE 搬进记事本，而是在需要的时候，多给你一点能力。
+
+## 功能亮点
+
+| 场景 | BetterNotepad 能做什么 |
+| --- | --- |
+| 📝 **专注编辑** | 多标签、拖拽排序、最近文件、自动缩进与括号匹配；重启后尝试恢复上次的未保存标签。 |
+| 🎨 **看着舒服** | Light / Dark / Warm 三套主题，中英双语界面，以及可选择开启的 3D 看板娘。 |
+| 🔎 **快速定位** | 文件内查找替换支持大小写、正则表达式和捕获组；打开文件夹后可跨文件搜索。 |
+| 📁 **处理文件** | 侧边栏文件树；支持 UTF-8、GBK、UTF-16 等编码与 LF / CRLF 行尾切换。 |
+| ✍️ **写代码与文档** | 常见语言语法高亮；Markdown 分栏预览与代码高亮；大文件会自动降低高亮开销。 |
+| 🖥️ **运行与交互** | 自动发现或手动配置本机解释器；在底部运行脚本、查看输出，或使用交互式终端。 |
 
 ## 下载与安装
 
-从 **[Releases](../../releases)** 下载最新安装包：
+前往 **[GitHub Releases](https://github.com/MeteorKai/BetterNotepad/releases)**，下载 `BetterNotepad_<版本号>_x64-setup.exe` 并运行安装。
 
-- `BetterNotepad_<版本号>_x64-setup.exe`
+- 当前提供 **Windows x64** 安装包。
+- 如果希望双击 `.txt` 时使用 BetterNotepad，请在 Windows 的“打开方式”中将它设为默认应用；安装程序不能替你保证默认关联。
+- 编辑文本无需配置解释器；**运行代码**需要电脑上已安装对应语言的解释器或运行时（例如 Python、Node.js）。
 
-双击安装即可。安装后 `.txt` 文件默认关联到 BetterNotepad（若未自动关联，右键文件 → 打开方式 → 选择 BetterNotepad → 始终）。想升级时在 **设置 → About** 点「检查更新」，会跳到 GitHub 查看新版本。
+## 快速上手
 
----
+1. **打开文件或文件夹**：用标签页编辑多个文件；打开文件夹后可使用侧边栏文件树和跨文件搜索。
+2. **预览 Markdown**：打开 `.md` 文件，在编辑器右上角切换分栏预览。
+3. **运行脚本**：在“设置 → Interpreters”确认解释器路径，打开受支持的脚本后按 `Ctrl+Enter`。需要交互输入时可使用底部终端。
+4. **调整习惯**：用工具栏切换主题，在设置中选择语言、字体、缩进和默认行尾。
 
-## 功能一览
+### 常用快捷键
 
-### 编辑体验
-- **实时语法高亮**：Python / PHP / JS / TS / JSX / Rust / Go / Java / C / C++ / C# / Kotlin / CSS / SCSS / JSON / Markdown / YAML / TOML / Bash / SQL / Ruby / Swift / INI / Docker / Diff 等
-- **智能输入**：括号/引号自动配对、自动缩进、`}` 自动缩进、`Ctrl+/` 行注释切换
-- **撤销 / 重做**：跨标签各自保留历史，切换标签不丢
-- **大文件保护**：超过 1 万行自动关闭高亮，保证输入流畅
-- 行号栏、可选 Word Wrap
+以下为编辑器快捷键；焦点在终端时，按键优先交给终端处理（字号缩放除外）。
 
-### 查找与替换
-- `Ctrl+F` 即时高亮全部匹配，循环上一个/下一个
-- 大小写开关
-- **正则模式**：输入 `\d+`、`TODO.*` 等模式；替换支持 `$1` 捕获组
-- 非法正则实时提示
-
-### 文件与标签
-- 多标签 + **拖拽排序** + 双击重命名
-- 新建 / 打开 / 保存 / 另存为 / **保存全部**
-- **会话恢复**：关闭或崩溃后自动恢复未保存内容
-- 最近文件列表
-- 编码选择：UTF-8 / UTF-8 BOM / GBK / UTF-16 LE / UTF-16 BE
-- 行尾：自动识别 LF / CRLF，新建文件可选默认，混合行尾保存时自动统一
-- 拖拽打开文件、"打开方式"打开文件（**单实例**：应用已在运行时，文件作为新标签页开在同一个窗口，不会双开）
-- **资源管理器右键菜单**：「以 BetterNotepad 编辑」直接开任意文件；写在 HKCU、无需管理员权限，
-  安装时添加、卸载时清理，可在 设置 › 通用 中关闭
-  （Windows 11 上它位于「显示更多选项」/ Shift+F10 之中 —— 一级菜单只接受 MSIX 打包的应用）
-
-### 文件管理
-- 侧边栏文件树：新建文件/文件夹、重命名、删除、自动定位当前文件
-- **跨文件搜索**（`Ctrl+Shift+F`）：递归搜索整个文件夹，点击结果跳转
-
-### 运行代码
-- 内置解释器运行器：Python / PHP / Node / Ruby / Go / Bash / Perl 等
-- 自动检测 PATH，或手动指定解释器路径
-- 底部输出面板：实时输出、退出码、一键停止
-
-### 其他
-- Markdown **实时预览**（带代码高亮，可分栏调比例）
-- 三套主题一键切换并记住
-- **中英双语界面**，默认跟随系统语言
-- 3D 看板娘：可拖拽、点击互动、打字鼓励
-
----
-
-## 使用说明
-
-### 快捷键
-
-| 快捷键 | 功能 |
-|---|---|
+| 快捷键 | 操作 |
+| --- | --- |
 | `Ctrl+N` / `Ctrl+O` | 新建 / 打开文件 |
 | `Ctrl+S` / `Ctrl+Shift+S` | 保存 / 另存为 |
-| `Ctrl+F` / `Ctrl+H` | 查找 / 查找并替换 |
+| `Ctrl+F` / `Ctrl+H` | 查找 / 替换 |
 | `Ctrl+Shift+F` | 跨文件搜索 |
-| `Enter` / `Shift+Enter`（查找框内） | 下一个 / 上一个匹配 |
-| `F3` / `Shift+F3` | 下一个 / 上一个匹配 |
-| `Ctrl+W` | 关闭当前标签 |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab` | 循环切换标签 |
-| `Ctrl+PageUp` / `Ctrl+PageDown` | 循环切换标签 |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | 切换标签 |
 | `Ctrl+Enter` | 运行当前文件 |
-| `Ctrl+/` | 行注释切换 |
-| `Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z` | 撤销 / 重做 |
+| `Ctrl+/` | 切换行注释 |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | 放大 / 缩小 / 重置字号 |
-| `Esc` | 关闭查找 / 弹窗 |
 
-### 编辑器设置
-点击工具栏 **齿轮** → **Editor** 页签：
+## 从源码运行
 
-- **Tab 宽度**（1–8）
-- **按 Tab 插入**：空格 或 真 Tab 字符
-- **默认行尾**：LF / CRLF
-- **字体**：内置多种等宽字体族（Consolas / Cascadia Code / JetBrains Mono / Fira Code / 微软雅黑…）
-- **字号**（8–32，与 `Ctrl+=/-` 联动）
+准备好 Node.js、Rust 工具链和 [Tauri 2 的 Windows 构建环境](https://v2.tauri.app/start/prerequisites/) 后，在项目根目录执行：
 
-### 界面语言
-点击工具栏 **齿轮** → **通用** 页签 → **语言**：
+```bash
+npm ci
+npm run tauri -- dev
+```
 
-- **跟随系统**（默认）：按系统语言自动选择中文或英文
-- **简体中文** / **English**：固定使用某一种
+生成 Windows NSIS 安装包：
 
-切换后界面立即刷新，设置保存在本地，无需重启。
+```bash
+npm run tauri -- build --bundles nsis
+```
 
-### 正则查找示例
-
-打开查找（`Ctrl+F`）→ 点 `.*` 开关：
-
-| 想做什么 | 查找 | 替换为 |
-|---|---|---|
-| 匹配所有数字 | `\d+` | — |
-| 匹配以 TODO 开头的行 | `TODO.*` | — |
-| 交换键值 | `(name=)(\w+)` | `$2=$1` |
-| 批量加引号 | `(\w+)=(\w+)` | `$1="$2"` |
-
-### 编码与行尾
-- 状态栏右侧显示当前编码，点击切换（下次保存即按新编码写入）
-- 打开 UTF-16 / GBK 文件自动识别
-- 状态栏显示当前缩进设置（`Spaces: N` / `Tab width: N`）
-
-### 运行代码
-1. 工具栏 → 设置 → **Interpreters**，勾选并确认解释器路径（可自动检测）
-2. 打开对应语言文件，`Ctrl+Enter` 运行
-3. 底部面板查看输出，`Stop` 终止
-
----
-
-## 常见问题
-
-**打开大文件很卡？**
-超过 1 万行会自动关闭语法高亮（状态栏显示 "Highlight off"），保证正常输入。
-
-**`.txt` 双击没有用 BetterNotepad 打开？**
-Windows 11 的默认应用由系统"打开方式"决定：右键文件 → 打开方式 → 始终使用 BetterNotepad。
-
-**已保存的未保存内容会丢吗？**
-不会。BetterNotepad 会自动恢复上次关闭/崩溃时的未保存内容。
-
----
-
-## 版本更新
-
-BetterNotepad **不做应用内自动更新**。想升级时：**设置 → About → 检查更新**，会在浏览器中打开项目的 GitHub 页面，那里能看到每个版本的安装包与更新说明，下载新的安装包直接覆盖安装即可（**未保存的内容会自动恢复**）。
-
-
-
----
+构建产物位于 `src-tauri/target/release/bundle/nsis/`。`npm run build` 只构建前端，不会生成桌面安装包。
 
 ## 技术栈
 
-Tauri 2 · React 19 · TypeScript · Tailwind CSS v4 · PrismJS · Three.js
+Tauri 2 · Rust · React 19 · TypeScript · CodeMirror 6 · Tailwind CSS 4 · xterm.js · PrismJS · Three.js
+
+## 更新与反馈
+
+BetterNotepad **不在应用内自动安装更新**。“设置 → About → 检查更新”会打开 Releases 页面，由你选择是否下载新版本。
+
+发现问题或有功能建议？欢迎在 [Issues](https://github.com/MeteorKai/BetterNotepad/issues) 交流。项目采用 Apache-2.0 许可证。
