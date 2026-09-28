@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -29,6 +29,49 @@ fn build_command(name: &str) -> Command {
 pub struct FileContent {
     pub content: String,
     pub encoding: String,
+    pub fingerprint: String,
+}
+
+const FILE_CHANGED_EXTERNALLY: &str = "FILE_CHANGED_EXTERNALLY";
+const FNV64_OFFSET: u64 = 0xcbf29ce484222325;
+const FNV64_PRIME: u64 = 0x100000001b3;
+
+fn fingerprint_update(mut hash: u64, bytes: &[u8]) -> u64 {
+    for &byte in bytes {
+        hash = (hash ^ u64::from(byte)).wrapping_mul(FNV64_PRIME);
+    }
+    hash
+}
+
+fn fingerprint_bytes(bytes: &[u8]) -> String {
+    format!(
+        "{:016x}-{}",
+        fingerprint_update(FNV64_OFFSET, bytes),
+        bytes.len()
+    )
+}
+
+#[tauri::command]
+pub fn file_fingerprint(path: String) -> Result<Option<String>, String> {
+    let file = match fs::File::open(&path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(format!("Failed to fingerprint file: {}", err)),
+    };
+    let mut reader = BufReader::new(file);
+    let mut buf = [0u8; 64 * 1024];
+    let (mut hash, mut len) = (FNV64_OFFSET, 0u64);
+    loop {
+        let count = reader
+            .read(&mut buf)
+            .map_err(|e| format!("Failed to fingerprint file: {}", e))?;
+        if count == 0 {
+            break;
+        }
+        hash = fingerprint_update(hash, &buf[..count]);
+        len += count as u64;
+    }
+    Ok(Some(format!("{:016x}-{}", hash, len)))
 }
 
 // Decode a file's raw bytes to UTF-8 and report the detected encoding. BOM is
@@ -88,14 +131,30 @@ fn encode_text(text: &str, encoding: &str) -> Vec<u8> {
 pub fn read_file(path: String) -> Result<FileContent, String> {
     let bytes = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
     let (content, encoding) = decode_bytes(&bytes);
-    Ok(FileContent { content, encoding })
+    Ok(FileContent {
+        content,
+        encoding,
+        fingerprint: fingerprint_bytes(&bytes),
+    })
 }
 
 #[tauri::command]
-pub fn write_file(path: String, content: String, encoding: Option<String>) -> Result<(), String> {
+pub fn write_file(
+    path: String,
+    content: String,
+    encoding: Option<String>,
+    expected_fingerprint: Option<String>,
+) -> Result<String, String> {
+    if let Some(expected) = expected_fingerprint {
+        if file_fingerprint(path.clone())? != Some(expected) {
+            return Err(FILE_CHANGED_EXTERNALLY.into());
+        }
+    }
     let enc = encoding.unwrap_or_else(|| "utf-8".to_string());
     let bytes = encode_text(&content, &enc);
-    fs::write(&path, bytes).map_err(|e| format!("Failed to write file: {}", e))
+    let fingerprint = fingerprint_bytes(&bytes);
+    fs::write(&path, bytes).map_err(|e| format!("Failed to write file: {}", e))?;
+    Ok(fingerprint)
 }
 
 #[tauri::command]
@@ -930,6 +989,49 @@ pub async fn search_in_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fingerprint_is_stable_and_detects_same_length_changes() {
+        assert_eq!(fingerprint_bytes(b"hello"), fingerprint_bytes(b"hello"));
+        assert_ne!(fingerprint_bytes(b"hello"), fingerprint_bytes(b"jello"));
+        assert_ne!(fingerprint_bytes(b"hello"), fingerprint_bytes(b"hello!"));
+    }
+
+    #[test]
+    fn conditional_write_does_not_overwrite_external_change() {
+        let path = std::env::temp_dir().join(format!(
+            "betternotepad-conditional-write-{}.txt",
+            std::process::id()
+        ));
+        let path_string = path.to_string_lossy().into_owned();
+        fs::write(&path, b"aaaa").unwrap();
+        let original = read_file(path_string.clone()).unwrap().fingerprint;
+        assert_eq!(
+            file_fingerprint(path_string.clone()).unwrap(),
+            Some(original.clone())
+        );
+
+        fs::write(&path, b"bbbb").unwrap();
+        let result = write_file(
+            path_string.clone(),
+            "cccc".into(),
+            Some("utf-8".into()),
+            Some(original),
+        );
+        assert_eq!(result.unwrap_err(), FILE_CHANGED_EXTERNALLY);
+        assert_eq!(fs::read(&path).unwrap(), b"bbbb");
+
+        let current = file_fingerprint(path_string.clone()).unwrap().unwrap();
+        let written = write_file(path_string.clone(), "cccc".into(), None, Some(current)).unwrap();
+        assert_eq!(file_fingerprint(path_string.clone()).unwrap(), Some(written.clone()));
+        assert_eq!(fs::read(&path).unwrap(), b"cccc");
+        fs::remove_file(path).unwrap();
+        assert_eq!(file_fingerprint(path_string.clone()).unwrap(), None);
+        assert_eq!(
+            write_file(path_string, "dddd".into(), None, Some(written)).unwrap_err(),
+            FILE_CHANGED_EXTERNALLY
+        );
+    }
 
     #[test]
     fn gbk_round_trip() {

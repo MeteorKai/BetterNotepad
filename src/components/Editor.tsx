@@ -49,6 +49,8 @@ interface TabEditorState {
   state: EditorState;
   scrollTop: number;
   scrollLeft: number;
+  reloadRevision: number;
+  hadFocus: boolean;
 }
 const editorStates = new Map<string, TabEditorState>();
 
@@ -95,6 +97,7 @@ interface EditorProps {
   wrap: boolean;
   bracketMatching: boolean;
   tabId: string;
+  reloadRevision: number;
 }
 
 const LINE_COMMENT_BY_LANG: Record<string, string> = {
@@ -140,7 +143,7 @@ function escapeRegExp(s: string): string {
 const externalSync = Annotation.define<boolean>();
 
 const Editor = forwardRef<EditorHandle, EditorProps>(
-  ({ content, onChange, onCursorChange, onLargeFileChange, onSelectionChange, fontSize, fontFamily, tabWidth, insertSpaces, language, wrap, bracketMatching, tabId }, ref) => {
+  ({ content, onChange, onCursorChange, onLargeFileChange, onSelectionChange, fontSize, fontFamily, tabWidth, insertSpaces, language, wrap, bracketMatching, tabId, reloadRevision }, ref) => {
     const hostRef = useRef<HTMLDivElement>(null);
     const viewRef = useRef<EditorView | null>(null);
     const lastEmittedRef = useRef(content);
@@ -206,14 +209,20 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
 
     useLayoutEffect(() => {
       const saved = editorStates.get(tabId);
-      // Reuse the stored state only while it still matches the incoming
-      // content; a mismatch (e.g. the tab was reloaded from disk) starts fresh.
-      const reuse = !!saved && saved.state.doc.toString() === content;
+      // A disk reload must start with fresh Undo history, even if its content
+      // happens to match the old document.
+      const reuse = !!saved && saved.reloadRevision === reloadRevision && saved.state.doc.toString() === content;
       const state =
         reuse && saved
           ? saved.state
           : EditorState.create({
               doc: content,
+              selection: saved && saved.reloadRevision !== reloadRevision
+                ? {
+                    anchor: Math.min(saved.state.selection.main.anchor, content.length),
+                    head: Math.min(saved.state.selection.main.head, content.length),
+                  }
+                : undefined,
               extensions: [
                 history({ newGroupDelay: 0 }),
                 drawSelection(),
@@ -282,9 +291,10 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
       onLargeFileChangeRef.current(largeFileRef.current);
       reloadLanguage(view);
 
-      if (reuse && saved) {
+      if (saved) {
         view.scrollDOM.scrollTop = saved.scrollTop;
         view.scrollDOM.scrollLeft = saved.scrollLeft;
+        if (saved.reloadRevision !== reloadRevision && saved.hadFocus) view.focus();
       }
       reportState(view.state);
 
@@ -294,12 +304,14 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
           state: view.state,
           scrollTop: view.scrollDOM.scrollTop,
           scrollLeft: view.scrollDOM.scrollLeft,
+          reloadRevision,
+          hadFocus: view.hasFocus,
         });
         view.destroy();
         viewRef.current = null;
       };
-      // The editor is remounted per tab (App keys it by tab id), so tabId is the
-      // only dependency; prop changes are handled by the effects below.
+      // App remounts the editor per tab and disk-reload revision. Other prop
+      // changes are handled by the effects below.
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [tabId]);
 

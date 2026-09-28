@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import { watchImmediate } from "@tauri-apps/plugin-fs";
 import type { Eol } from "./useEditorSettings";
 import { t } from "../i18n";
 
@@ -21,10 +22,26 @@ export interface Tab {
   encoding: string;
   eol?: Eol;
   fileHandle?: BrowserFileHandle;
+  diskVersion?: string;
+  externalChange?: "changed" | "missing";
+  reloadRevision?: number;
+  needsDiskLoad?: boolean;
 }
 
 export function isTabUnsaved(tab: Tab): boolean {
-  return tab.content.length > 0 && (tab.modified || !tab.filePath);
+  return tab.modified || (!tab.filePath && tab.content.length > 0) ||
+    (tab.externalChange === "missing" && tab.content.length > 0);
+}
+
+interface ReadFileResult {
+  content: string;
+  encoding: string;
+  fingerprint: string;
+}
+
+function parentDirectory(path: string): string {
+  const slash = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
+  return slash < 0 ? "." : path.slice(0, slash + 1);
 }
 
 export const ENCODING_OPTIONS: { id: string; label: string }[] = [
@@ -88,6 +105,8 @@ interface SessionEntry {
   modified: boolean;
   encoding: string;
   eol?: Eol;
+  diskVersion?: string;
+  externalChange?: "changed" | "missing";
 }
 
 interface SessionSnapshot {
@@ -107,6 +126,8 @@ function buildSession(state: TabsState): SessionSnapshot {
       modified: t.modified,
       encoding: t.encoding,
       eol: t.eol,
+      diskVersion: t.diskVersion,
+      externalChange: t.externalChange,
     })),
   };
 }
@@ -125,7 +146,7 @@ function serializeSession(snapshot: SessionSnapshot): string {
   // reads it back from disk instead, so keeping it only buys a synchronous
   // multi-megabyte storage write.
   if (contentSize(tabs) > SESSION_CONTENT_BUDGET) {
-    tabs = tabs.map((e) => (e.filePath && !e.modified ? { ...e, content: "" } : e));
+    tabs = tabs.map((e) => (e.filePath && !e.modified && !e.externalChange ? { ...e, content: "" } : e));
   }
   // Modified or never-saved content is kept whatever the size: dropping it would
   // silently lose edits when the session is restored.
@@ -184,6 +205,9 @@ export function useTabs(options?: { defaultEol?: Eol }) {
           modified: e.modified,
           encoding: e.encoding ?? "utf-8",
           eol: e.eol ?? detectEol(e.content),
+          diskVersion: e.diskVersion,
+          externalChange: e.externalChange,
+          needsDiskLoad: !!e.filePath && !e.modified && !e.externalChange && e.content === "",
         }));
       if (tabs.length > 0) {
         const activeIndex = Math.min(Math.max(0, saved.activeIndex), tabs.length - 1);
@@ -202,7 +226,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
   tabsRef.current = state.tabs;
   const activeTabIdRef = useRef(state.activeTabId);
   activeTabIdRef.current = state.activeTabId;
-  const initialTabsRef = useRef(state.tabs);
+  const editEpochRef = useRef(new Map<string, number>());
 
   const [recentFiles, setRecentFiles] = useState<RecentFile[]>(() => loadRecent());
 
@@ -275,9 +299,10 @@ export function useTabs(options?: { defaultEol?: Eol }) {
   }, [writeSession]);
 
   const discardUnsavedFromSession = useCallback(() => {
-    const snapshot = buildSession({ tabs: tabsRef.current, activeTabId: activeTabIdRef.current });
+    const currentTabs = tabsRef.current;
+    const snapshot = buildSession({ tabs: currentTabs, activeTabId: activeTabIdRef.current });
     snapshot.tabs = snapshot.tabs.filter(
-      (e) => !(e.content.length > 0 && (e.modified || !e.filePath))
+      (_, index) => !isTabUnsaved(currentTabs[index])
     );
     writeSession(snapshot);
   }, [writeSession]);
@@ -290,33 +315,187 @@ export function useTabs(options?: { defaultEol?: Eol }) {
     return () => window.clearTimeout(timer);
   }, [state.tabs, state.activeTabId, persistSessionNow]);
 
-  // Reload from disk any restored saved tab whose content was stripped to fit the storage cap.
-  useEffect(() => {
-    let cancelled = false;
-    const missing = initialTabsRef.current.filter((t) => t.filePath && !t.content && !t.modified);
-    (async () => {
-      for (const tab of missing) {
-        try {
-          const { content, encoding } = await invoke<{ content: string; encoding: string }>("read_file", {
-            path: tab.filePath!,
-          });
-          if (cancelled) return;
-          patchTab(tab.id, { content, modified: false, encoding, eol: detectEol(content) });
-        } catch (err) {
-          console.error("Failed to reload session tab:", tab.filePath, err);
+  const savingPathsRef = useRef(new Set<string>());
+  const pendingDirectoriesRef = useRef(new Set<string>());
+  const scanTimerRef = useRef<number | null>(null);
+  const scanningRef = useRef(false);
+
+  const reconcilePath = useCallback(async (path: string) => {
+    if (savingPathsRef.current.has(path)) return;
+    let fingerprint: string | null;
+    try {
+      fingerprint = await invoke<string | null>("file_fingerprint", { path });
+    } catch (err) {
+      console.error("Failed to check file changes:", path, err);
+      return;
+    }
+    if (savingPathsRef.current.has(path)) return;
+
+    if (fingerprint === null) {
+      setState((s) => {
+        let changed = false;
+        const tabs = s.tabs.map((tab) => {
+          if (tab.filePath !== path || tab.externalChange === "missing" || tab.externalChange === "changed") return tab;
+          changed = true;
+          return { ...tab, externalChange: "missing" as const };
+        });
+        return changed ? { ...s, tabs } : s;
+      });
+      return;
+    }
+
+    const needsContent = tabsRef.current.some((tab) =>
+      tab.filePath === path && !tab.modified &&
+      (tab.diskVersion !== fingerprint || tab.needsDiskLoad)
+    );
+    if (!needsContent) {
+      setState((s) => {
+        let changed = false;
+        const tabs = s.tabs.map((tab) => {
+          if (tab.filePath !== path) return tab;
+          const externalChange = tab.externalChange === "changed" || tab.diskVersion !== fingerprint
+            ? "changed" : undefined;
+          if (tab.externalChange === externalChange) return tab;
+          changed = true;
+          return { ...tab, externalChange: externalChange as Tab["externalChange"] };
+        });
+        return changed ? { ...s, tabs } : s;
+      });
+      return;
+    }
+
+    let disk: ReadFileResult;
+    try {
+      disk = await invoke<ReadFileResult>("read_file", { path });
+    } catch (err) {
+      // A rename-style save may temporarily remove the path. The next watch
+      // event or window-focus check will retry without touching local text.
+      console.error("Failed to reload changed file:", path, err);
+      return;
+    }
+    if (savingPathsRef.current.has(path)) return;
+    setState((s) => {
+      let changed = false;
+      const tabs = s.tabs.map((tab) => {
+        if (tab.filePath !== path) return tab;
+        if (tab.modified) {
+          const externalChange = tab.externalChange === "changed" || tab.diskVersion !== disk.fingerprint
+            ? "changed" : undefined;
+          if (tab.externalChange === externalChange) return tab;
+          changed = true;
+          return { ...tab, externalChange: externalChange as Tab["externalChange"] };
         }
+        if (tab.diskVersion === disk.fingerprint && !tab.needsDiskLoad) {
+          if (!tab.externalChange) return tab;
+          changed = true;
+          return { ...tab, externalChange: undefined };
+        }
+        changed = true;
+        return {
+          ...tab,
+          content: disk.content,
+          encoding: disk.encoding,
+          eol: detectEol(disk.content),
+          diskVersion: disk.fingerprint,
+          modified: false,
+          externalChange: undefined,
+          needsDiskLoad: false,
+          reloadRevision: (tab.reloadRevision ?? 0) + 1,
+        };
+      });
+      return changed ? { ...s, tabs } : s;
+    });
+  }, []);
+
+  const drainReconcile = useCallback(async () => {
+    if (scanningRef.current) return;
+    scanningRef.current = true;
+    try {
+      while (pendingDirectoriesRef.current.size > 0) {
+        const directories = new Set(pendingDirectoriesRef.current);
+        pendingDirectoriesRef.current.clear();
+        const paths = [...new Set(tabsRef.current.flatMap((tab) =>
+          tab.filePath && (directories.has("*") || directories.has(parentDirectory(tab.filePath)))
+            ? [tab.filePath] : []
+        ))];
+        await Promise.all(paths.map(reconcilePath));
       }
-    })();
+    } finally {
+      scanningRef.current = false;
+      if (pendingDirectoriesRef.current.size > 0) void drainReconcile();
+    }
+  }, [reconcilePath]);
+
+  const scheduleReconcile = useCallback((directory?: string) => {
+    pendingDirectoriesRef.current.add(directory ?? "*");
+    if (scanTimerRef.current !== null) return;
+    scanTimerRef.current = window.setTimeout(() => {
+      scanTimerRef.current = null;
+      void drainReconcile();
+    }, 250);
+  }, [drainReconcile]);
+
+  const watchedDirectories = [...new Set(state.tabs.flatMap((tab) =>
+    tab.filePath ? [parentDirectory(tab.filePath)] : []
+  ))].sort().join("\0");
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    scheduleReconcile();
+    if (!watchedDirectories) return;
+    let disposed = false;
+    const unwatchers: Array<() => void> = [];
+    const pollers: number[] = [];
+    for (const directory of watchedDirectories.split("\0")) {
+      void watchImmediate(directory, (event) => {
+        // Reading a file must not trigger another read loop on platforms that
+        // report access events.
+        if (typeof event.type === "object" && "access" in event.type) return;
+        scheduleReconcile(directory);
+      }, { recursive: false }).then((unwatch) => {
+        if (disposed) unwatch();
+        else unwatchers.push(unwatch);
+      }).catch((err) => {
+        if (disposed) return;
+        console.error("Failed to watch directory; polling instead:", directory, err);
+        pollers.push(window.setInterval(() => scheduleReconcile(directory), 2000));
+      });
+    }
     return () => {
-      cancelled = true;
+      disposed = true;
+      for (const unwatch of unwatchers) unwatch();
+      for (const poller of pollers) window.clearInterval(poller);
     };
-  }, [patchTab]);
+  }, [watchedDirectories, scheduleReconcile]);
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window)) return;
+    const onFocus = () => scheduleReconcile();
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") scheduleReconcile();
+    };
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+      if (scanTimerRef.current !== null) window.clearTimeout(scanTimerRef.current);
+    };
+  }, [scheduleReconcile]);
 
   const setActiveContent = useCallback((content: string) => {
+    const id = activeTabIdRef.current;
+    const renderedRevision = tabsRef.current.find((tab) => tab.id === id)?.reloadRevision ?? 0;
+    editEpochRef.current.set(id, (editEpochRef.current.get(id) ?? 0) + 1);
     setState((s) => ({
       ...s,
       tabs: s.tabs.map((t) =>
-        t.id === s.activeTabId ? { ...t, content, modified: true } : t
+        t.id === id ? {
+          ...t,
+          content,
+          modified: true,
+          externalChange: (t.reloadRevision ?? 0) !== renderedRevision ? "changed" : t.externalChange,
+        } : t
       ),
     }));
   }, []);
@@ -329,6 +508,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
   }, []);
 
   const setTabEncoding = useCallback((id: string, encoding: string) => {
+    editEpochRef.current.set(id, (editEpochRef.current.get(id) ?? 0) + 1);
     patchTab(id, { encoding });
   }, [patchTab]);
 
@@ -338,7 +518,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
   }, []);
 
   const addTabs = useCallback(
-    (loaded: Array<{ filePath: string | null; fileName: string; content: string; encoding: string; eol?: Eol }>) => {
+    (loaded: Array<{ filePath: string | null; fileName: string; content: string; encoding: string; eol?: Eol; diskVersion?: string }>) => {
       if (!loaded.length) return;
       setState((s) => {
         const tabs = [...s.tabs];
@@ -349,6 +529,24 @@ export function useTabs(options?: { defaultEol?: Eol }) {
             : undefined;
           if (existing) {
             activeTabId = existing.id;
+            const index = tabs.indexOf(existing);
+            if (existing.modified) {
+              const externalChange = existing.externalChange === "changed" || existing.diskVersion !== item.diskVersion
+                ? "changed" : undefined;
+              tabs[index] = { ...existing, externalChange };
+            } else if (existing.diskVersion !== item.diskVersion || existing.needsDiskLoad) {
+              tabs[index] = {
+                ...existing,
+                content: item.content,
+                encoding: item.encoding,
+                eol: item.eol ?? detectEol(item.content),
+                diskVersion: item.diskVersion,
+                modified: false,
+                externalChange: undefined,
+                needsDiskLoad: false,
+                reloadRevision: (existing.reloadRevision ?? 0) + 1,
+              };
+            }
           } else {
             const tab: Tab = {
               id: newId(),
@@ -358,6 +556,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
               modified: false,
               encoding: item.encoding,
               eol: item.eol ?? detectEol(item.content),
+              diskVersion: item.diskVersion,
             };
             tabs.push(tab);
             activeTabId = tab.id;
@@ -371,7 +570,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
 
   const openPaths = useCallback(
     async (paths: string[]) => {
-      type LoadedTab = { filePath: string; fileName: string; content: string; encoding: string; eol: Eol };
+      type LoadedTab = { filePath: string; fileName: string; content: string; encoding: string; eol: Eol; diskVersion: string };
       const loaded: (LoadedTab | null)[] = Array(paths.length).fill(null);
       let next = 0;
       await Promise.all(Array.from({ length: Math.min(4, paths.length) }, async () => {
@@ -379,11 +578,11 @@ export function useTabs(options?: { defaultEol?: Eol }) {
           const index = next++;
           const path = paths[index];
           try {
-            const [{ content, encoding }, name] = await Promise.all([
-              invoke<{ content: string; encoding: string }>("read_file", { path }),
+            const [{ content, encoding, fingerprint }, name] = await Promise.all([
+              invoke<ReadFileResult>("read_file", { path }),
               invoke<string>("get_file_name", { path }),
             ]);
-            loaded[index] = { filePath: path, fileName: name, content, encoding, eol: detectEol(content) };
+            loaded[index] = { filePath: path, fileName: name, content, encoding, eol: detectEol(content), diskVersion: fingerprint };
           } catch (err) {
             console.error("Failed to read file:", path, err);
           }
@@ -423,17 +622,38 @@ export function useTabs(options?: { defaultEol?: Eol }) {
     }
   }, [openPaths]);
 
+  const finishSave = useCallback((snapshot: Tab, patch: Partial<Tab>) => {
+    setState((s) => ({
+      ...s,
+      tabs: s.tabs.map((tab) => tab.id === snapshot.id ? {
+        ...tab,
+        ...patch,
+        needsDiskLoad: false,
+        modified: tab.content !== snapshot.content ||
+          tab.encoding !== snapshot.encoding || tab.eol !== snapshot.eol,
+      } : tab),
+    }));
+  }, []);
+
   const saveTabAs = useCallback(
     async (tab: Tab): Promise<string | null> => {
+      const editEpoch = editEpochRef.current.get(tab.id) ?? 0;
       const outContent = normalizeEol(tab.content, tab.eol ?? defaultEolRef.current);
       try {
         if ("__TAURI_INTERNALS__" in window) {
           const selected = await save({ defaultPath: tab.fileName, filters: saveFilters() });
           if (!selected) return null;
-          await invoke("write_file", { path: selected, content: outContent, encoding: tab.encoding });
+          savingPathsRef.current.add(selected);
+          let diskVersion: string;
+          try {
+            diskVersion = await invoke<string>("write_file", { path: selected, content: outContent, encoding: tab.encoding });
+          } finally {
+            savingPathsRef.current.delete(selected);
+            scheduleReconcile(parentDirectory(selected));
+          }
           const name = await invoke<string>("get_file_name", { path: selected });
-          patchTab(tab.id, { filePath: selected, fileName: name, modified: false });
-          return selected;
+          finishSave(tab, { filePath: selected, fileName: name, diskVersion, externalChange: undefined });
+          return (editEpochRef.current.get(tab.id) ?? 0) === editEpoch ? selected : null;
         }
         // Plain-browser preview: real save dialog (Chromium) if available…
         if ("showSaveFilePicker" in window) {
@@ -456,7 +676,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
             const writable = await handle.createWritable();
             await writable.write(outContent);
             await writable.close();
-            patchTab(tab.id, { fileHandle: handle, fileName: handle.name, modified: false });
+            finishSave(tab, { fileHandle: handle, fileName: handle.name, externalChange: undefined });
             return null;
           } catch (err) {
             if ((err as Error).name === "AbortError") return null;
@@ -474,30 +694,58 @@ export function useTabs(options?: { defaultEol?: Eol }) {
         a.click();
         a.remove();
         URL.revokeObjectURL(url);
-        patchTab(tab.id, { fileName: name, modified: false });
+        finishSave(tab, { fileName: name, externalChange: undefined });
         return null;
       } catch (err) {
         console.error("Failed to save file as:", err);
         return null;
       }
     },
-    [patchTab]
+    [finishSave, scheduleReconcile]
   );
 
   const saveTabData = useCallback(
-    async (tab: Tab): Promise<string | null> => {
+    async (original: Tab, force = false): Promise<string | null> => {
+      const tab = tabsRef.current.find((current) => current.id === original.id) ?? original;
+      const editEpoch = editEpochRef.current.get(tab.id) ?? 0;
       const outContent = normalizeEol(tab.content, tab.eol ?? defaultEolRef.current);
       try {
         if (tab.filePath) {
-          await invoke("write_file", { path: tab.filePath, content: outContent, encoding: tab.encoding });
-          patchTab(tab.id, { modified: false });
-          return tab.filePath;
+          if (!force && tab.externalChange === "missing") return await saveTabAs(tab);
+          if (savingPathsRef.current.has(tab.filePath)) return null;
+          if (!force && (tab.externalChange || !tab.diskVersion)) {
+            if (!tab.externalChange) patchTab(tab.id, { externalChange: "changed" });
+            return null;
+          }
+          savingPathsRef.current.add(tab.filePath);
+          try {
+            const diskVersion = await invoke<string>("write_file", {
+              path: tab.filePath,
+              content: outContent,
+              encoding: tab.encoding,
+              expectedFingerprint: force ? undefined : tab.diskVersion,
+            });
+            finishSave(tab, { diskVersion, externalChange: undefined });
+            return (editEpochRef.current.get(tab.id) ?? 0) === editEpoch ? tab.filePath : null;
+          } catch (err) {
+            if (String(err).includes("FILE_CHANGED_EXTERNALLY")) {
+              let missing = false;
+              try {
+                missing = (await invoke<string | null>("file_fingerprint", { path: tab.filePath })) === null;
+              } catch { /* keep the conservative conflict state */ }
+              patchTab(tab.id, { externalChange: missing ? "missing" : "changed" });
+            }
+            throw err;
+          } finally {
+            savingPathsRef.current.delete(tab.filePath);
+            scheduleReconcile(parentDirectory(tab.filePath));
+          }
         }
         if (tab.fileHandle) {
           const writable = await tab.fileHandle.createWritable();
           await writable.write(outContent);
           await writable.close();
-          patchTab(tab.id, { modified: false });
+          finishSave(tab, { externalChange: undefined });
           return null;
         }
         return await saveTabAs(tab);
@@ -506,7 +754,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
         return null;
       }
     },
-    [patchTab, saveTabAs]
+    [finishSave, patchTab, saveTabAs, scheduleReconcile]
   );
 
   const saveActiveAs = useCallback(async () => {
@@ -521,12 +769,60 @@ export function useTabs(options?: { defaultEol?: Eol }) {
     await saveTabData(tab);
   }, [state, saveTabData]);
 
+  const reloadTabFromDisk = useCallback(async (id: string) => {
+    const snapshot = tabsRef.current.find((tab) => tab.id === id);
+    if (!snapshot?.filePath) return;
+    let disk: ReadFileResult;
+    try {
+      disk = await invoke<ReadFileResult>("read_file", { path: snapshot.filePath });
+    } catch (err) {
+      console.error("Failed to reload file:", snapshot.filePath, err);
+      try {
+        if ((await invoke<string | null>("file_fingerprint", { path: snapshot.filePath })) === null) {
+          patchTab(id, { externalChange: "missing" });
+        }
+      } catch { /* leave the current content untouched */ }
+      return;
+    }
+    setState((s) => ({
+      ...s,
+      tabs: s.tabs.map((tab) => {
+        if (tab.id !== id || tab.filePath !== snapshot.filePath) return tab;
+        // Do not discard a new edit made while the read was in flight.
+        if (tab.content !== snapshot.content || tab.modified !== snapshot.modified) {
+          return { ...tab, externalChange: "changed" };
+        }
+        return {
+          ...tab,
+          content: disk.content,
+          encoding: disk.encoding,
+          eol: detectEol(disk.content),
+          diskVersion: disk.fingerprint,
+          modified: false,
+          externalChange: undefined,
+          needsDiskLoad: false,
+          reloadRevision: (tab.reloadRevision ?? 0) + 1,
+        };
+      }),
+    }));
+  }, [patchTab]);
+
+  const overwriteExternalChange = useCallback(async (id: string) => {
+    const tab = tabsRef.current.find((current) => current.id === id);
+    if (tab?.externalChange !== "changed") return;
+    await saveTabData(tab, true);
+  }, [saveTabData]);
+
   // Save every unsaved tab in order. Stops if a Save-As dialog is cancelled
   // (the tab stays `modified`), so the user can retry.
   const saveAll = useCallback(async (): Promise<boolean> => {
     for (const tab of tabsRef.current) {
       if (!isTabUnsaved(tab)) continue;
-      await saveTabData(tab);
+      const savedPath = await saveTabData(tab);
+      if ("__TAURI_INTERNALS__" in window) {
+        if (!savedPath) return false;
+        continue;
+      }
       const updated = tabsRef.current.find((t) => t.id === tab.id);
       if (updated && updated.modified) return false;
     }
@@ -536,6 +832,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
   const [pendingClose, setPendingClose] = useState<Tab | null>(null);
 
   const closeTab = useCallback((id: string) => {
+    editEpochRef.current.delete(id);
     setState((s) => {
       const idx = s.tabs.findIndex((t) => t.id === id);
       if (idx === -1) return s;
@@ -566,12 +863,15 @@ export function useTabs(options?: { defaultEol?: Eol }) {
     setState((s) => ({
       ...s,
       tabs: s.tabs.map((t) =>
-        t.filePath === oldPath ? { ...t, filePath: newPath, fileName: newName } : t
+        t.filePath === oldPath ? { ...t, filePath: newPath, fileName: newName, externalChange: undefined } : t
       ),
     }));
   }, []);
 
   const closeOpenFile = useCallback((path: string) => {
+    for (const tab of tabsRef.current) {
+      if (tab.filePath === path) editEpochRef.current.delete(tab.id);
+    }
     setState((s) => {
       const tabs = s.tabs.filter((t) => t.filePath !== path);
       if (tabs.length === 0) {
@@ -621,6 +921,8 @@ export function useTabs(options?: { defaultEol?: Eol }) {
     clearRecent,
     saveActive,
     saveActiveAs,
+    reloadTabFromDisk,
+    overwriteExternalChange,
     saveAll,
     saveTabData,
     persistSessionNow,

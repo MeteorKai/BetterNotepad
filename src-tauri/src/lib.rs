@@ -46,6 +46,7 @@ pub fn run() {
         .manage(runlog::RunLogs::default())
         .invoke_handler(tauri::generate_handler![
             commands::read_file,
+            commands::file_fingerprint,
             commands::write_file,
             commands::file_exists,
             commands::get_file_name,

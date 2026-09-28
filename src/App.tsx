@@ -131,6 +131,8 @@ function App() {
     saveActiveAs,
     saveAll,
     saveTabData,
+    reloadTabFromDisk,
+    overwriteExternalChange,
     persistSessionNow,
     discardUnsavedFromSession,
     requestClose,
@@ -849,16 +851,53 @@ function App() {
             </svg>
           </button>
         )}
-        <div className="flex-1 overflow-hidden p-3">
-          <div ref={splitRef} className="h-full flex">
+        <div className="flex-1 overflow-hidden p-3 flex flex-col gap-2">
+          {activeTab.externalChange && (
+            <div role="status" className="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-line bg-elevated px-3 py-2 text-sm shadow-card">
+              <span className="text-warn" aria-hidden="true">●</span>
+              <div className="min-w-0 flex-1">
+                <span className="font-medium text-ink">
+                  {activeTab.externalChange === "missing"
+                    ? t("external.missingTitle", { name: activeTab.fileName })
+                    : t("external.changedTitle", { name: activeTab.fileName })}
+                </span>
+                <span className="ml-2 text-sub">
+                  {activeTab.externalChange === "missing" ? t("external.missingBody") : t("external.changedBody")}
+                </span>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                {activeTab.externalChange === "missing" ? (
+                  <>
+                    <button onClick={() => void saveActiveAs()} className="rounded-md bg-accent px-2.5 py-1 font-medium text-accent-ink hover:bg-accent-strong">
+                      {t("external.saveAs")}
+                    </button>
+                    <button onClick={() => void reloadTabFromDisk(activeTab.id)} className="rounded-md px-2.5 py-1 text-sub hover:bg-hover hover:text-ink">
+                      {t("external.retry")}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button onClick={() => void reloadTabFromDisk(activeTab.id)} className="rounded-md bg-accent px-2.5 py-1 font-medium text-accent-ink hover:bg-accent-strong">
+                      {t("external.reload")}
+                    </button>
+                    <button onClick={() => void overwriteExternalChange(activeTab.id)} className="rounded-md px-2.5 py-1 text-sub hover:bg-hover hover:text-ink">
+                      {t("external.overwrite")}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+          <div ref={splitRef} className="flex-1 min-h-0 flex">
             <div
               className="relative rounded-2xl border border-line shadow-card overflow-hidden bg-editor"
               style={{ flex: previewOpen && isMarkdown ? editorRatio : 1, minWidth: 0 }}
             >
               <Editor
-                key={activeTab.id}
+                key={`${activeTab.id}:${activeTab.reloadRevision ?? 0}`}
                 ref={editorRef}
                 tabId={activeTab.id}
+                reloadRevision={activeTab.reloadRevision ?? 0}
                 content={activeTab.content}
                 onChange={handleEditorChange}
                 onCursorChange={updateCursor}

@@ -213,6 +213,15 @@ const en: Dict = {
   "confirm.saveAll": "Save All",
   "confirm.discardAll": "Don't Save",
 
+  "external.changedTitle": "“{name}” changed on disk.",
+  "external.changedBody": "Reload discards your edits; overwrite discards the other changes.",
+  "external.missingTitle": "“{name}” is missing on disk.",
+  "external.missingBody": "Your content is safe here. If the file returns, reloading discards your edits; save a copy first.",
+  "external.reload": "Reload from disk",
+  "external.overwrite": "Overwrite disk file",
+  "external.saveAs": "Save As",
+  "external.retry": "Retry reload",
+
   "settings.title": "Settings",
   "settings.tab.editor": "Editor",
   "settings.tab.interpreters": "Interpreters",
@@ -488,6 +497,15 @@ const zh: Dict = {
   "confirm.closeAppBody": "有 {count} 个文件未保存，退出前要全部保存吗？",
   "confirm.saveAll": "全部保存",
   "confirm.discardAll": "全部不保存",
+
+  "external.changedTitle": "“{name}”在磁盘上已更改。",
+  "external.changedBody": "重新载入会丢弃本地编辑；覆盖磁盘会丢弃外部更改。",
+  "external.missingTitle": "磁盘上找不到“{name}”。",
+  "external.missingBody": "编辑内容仍保留。若文件重新出现，重载会丢弃本地编辑；可先另存一份。",
+  "external.reload": "从磁盘重新载入",
+  "external.overwrite": "覆盖磁盘文件",
+  "external.saveAs": "另存为",
+  "external.retry": "重试载入",
 
   "settings.title": "设置",
   "settings.tab.editor": "编辑器",
