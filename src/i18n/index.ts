@@ -104,6 +104,9 @@ const en: Dict = {
   "globalSearch.searching": "Searching…",
   "globalSearch.noResults": "No matches",
   "globalSearch.results": "{count} matches in {files} files",
+  "globalSearch.filesTruncated": "Results are incomplete: only the first {count} matching files are shown. More matching files were omitted; narrow your search.",
+  "globalSearch.partialResults": "Results are incomplete: some files have additional matching lines. Narrow your search.",
+  "globalSearch.matchesTruncated": "Only the first {count} matching lines are shown; additional matches were omitted.",
   "globalSearch.close": "Close",
 
   "output.title": "Output",
@@ -185,6 +188,7 @@ const en: Dict = {
   "explorer.closeTitle": "Close explorer",
   "explorer.empty": "Empty folder",
   "explorer.confirmDelete": "Delete “{name}”?",
+  "explorer.deleteUnsaved": "Deletion cancelled: “{name}” has unsaved changes. Save, Save As to keep a copy, or close the tab and discard the changes before deleting again.",
   "explorer.namePlaceholder": "Name",
 
   "recent.title": "Recent Files",
@@ -391,6 +395,9 @@ const zh: Dict = {
   "globalSearch.searching": "搜索中…",
   "globalSearch.noResults": "无匹配项",
   "globalSearch.results": "{files} 个文件中有 {count} 处匹配",
+  "globalSearch.filesTruncated": "搜索结果不完整：仅显示前 {count} 个命中文件，更多命中文件已省略，请缩小搜索范围。",
+  "globalSearch.partialResults": "搜索结果不完整：部分文件还有未显示的命中行，请缩小搜索范围。",
+  "globalSearch.matchesTruncated": "仅显示前 {count} 条命中行，更多匹配已省略。",
   "globalSearch.close": "关闭",
 
   "output.title": "输出",
@@ -470,6 +477,7 @@ const zh: Dict = {
   "explorer.closeTitle": "关闭资源管理器",
   "explorer.empty": "空文件夹",
   "explorer.confirmDelete": "确定删除「{name}」？",
+  "explorer.deleteUnsaved": "已取消删除：「{name}」有未保存的更改。请先保存、另存为保留副本，或关闭标签并放弃更改，再重新删除。",
   "explorer.namePlaceholder": "名称",
 
   "recent.title": "最近文件",

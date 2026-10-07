@@ -1,7 +1,7 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { readDir } from "@tauri-apps/plugin-fs";
+import { readDir, watchImmediate } from "@tauri-apps/plugin-fs";
 import { sep } from "@tauri-apps/api/path";
 
 export interface FileNode {
@@ -39,11 +39,25 @@ function isUnderPath(filePath: string, dirPath: string): boolean {
   );
 }
 
+function visibleDirectories(node: FileNode | null, expanded: Set<string>): string[] {
+  if (!node) return [];
+  const directories = [node.path];
+  if (expanded.has(node.path)) {
+    for (const child of node.children ?? []) {
+      if (child.isDir && expanded.has(child.path)) {
+        directories.push(...visibleDirectories(child, expanded));
+      }
+    }
+  }
+  return directories;
+}
+
 export function useFileExplorer() {
   const [isOpen, setIsOpen] = useState(false);
   const [folderPath, setFolderPath] = useState<string | null>(null);
   const [root, setRoot] = useState<FileNode | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const latestReadsRef = useRef(new Map<string, symbol>());
 
   const readDirEntries = useCallback(async (dirPath: string): Promise<FileNode[]> => {
     const entries = await readDir(dirPath);
@@ -53,7 +67,7 @@ export function useFileExplorer() {
       ? dirPath
       : dirPath + separator;
     for (const e of entries) {
-      if (e.name.startsWith(".") || SKIP_DIRS.has(e.name)) continue;
+      if (e.isDirectory && SKIP_DIRS.has(e.name)) continue;
       nodes.push({ name: e.name, path: prefix + e.name, isDir: e.isDirectory });
     }
     nodes.sort((a, b) =>
@@ -67,6 +81,7 @@ export function useFileExplorer() {
       const selected = await open({ directory: true, multiple: false });
       if (!selected) return;
       const dir = selected as string;
+      latestReadsRef.current.clear();
       const entries = await readDirEntries(dir);
       const name = dir.split(/[\\/]/).filter(Boolean).pop() || dir;
       setFolderPath(dir);
@@ -78,31 +93,13 @@ export function useFileExplorer() {
     }
   }, [readDirEntries]);
 
-  const toggleDir = useCallback(
-    async (node: FileNode) => {
-      const willExpand = !expanded.has(node.path);
-      setExpanded((prev) => {
-        const next = new Set(prev);
-        if (willExpand) next.add(node.path);
-        else next.delete(node.path);
-        return next;
-      });
-      if (willExpand && !node.children) {
-        try {
-          const children = await readDirEntries(node.path);
-          setRoot((r) => updateTreeNode(r, node.path, (n) => ({ ...n, children })));
-        } catch (err) {
-          console.error("Failed to read dir:", node.path, err);
-        }
-      }
-    },
-    [expanded, readDirEntries]
-  );
-
   const refreshDir = useCallback(
-    async (dirPath: string) => {
+    async (dirPath: string): Promise<boolean> => {
+      const request = Symbol();
+      latestReadsRef.current.set(dirPath, request);
       try {
         const children = await readDirEntries(dirPath);
+        if (latestReadsRef.current.get(dirPath) !== request) return false;
         setRoot((r) =>
           updateTreeNode(r, dirPath, (n) => {
             const oldChildren = new Map((n.children ?? []).map((c) => [c.path, c]));
@@ -115,12 +112,81 @@ export function useFileExplorer() {
             };
           })
         );
+        return true;
       } catch (err) {
         console.error("Failed to refresh dir:", dirPath, err);
+        return false;
       }
     },
     [readDirEntries]
   );
+
+  const toggleDir = useCallback(
+    async (node: FileNode) => {
+      const willExpand = !expanded.has(node.path);
+      setExpanded((prev) => {
+        const next = new Set(prev);
+        if (willExpand) next.add(node.path);
+        else next.delete(node.path);
+        return next;
+      });
+      // Collapsed directories are not watched, so their cached entries may be stale.
+      if (willExpand) await refreshDir(node.path);
+    },
+    [expanded, refreshDir]
+  );
+
+  const watchedDirectories = isOpen ? visibleDirectories(root, expanded).sort().join("\0") : "";
+
+  useEffect(() => {
+    if (!("__TAURI_INTERNALS__" in window) || !watchedDirectories) return;
+    let disposed = false;
+    const directories = watchedDirectories.split("\0");
+    const timers = new Map<string, number>();
+    const unwatchers: Array<() => void> = [];
+    const pollers: number[] = [];
+    const schedule = (directory: string) => {
+      if (disposed) return;
+      if (timers.has(directory)) return;
+      timers.set(directory, window.setTimeout(() => {
+        timers.delete(directory);
+        if (!disposed) void refreshDir(directory);
+      }, 250));
+    };
+    for (const directory of directories) {
+      void watchImmediate(directory, (event) => {
+        if (typeof event.type === "object" && (
+          "access" in event.type || ("modify" in event.type && event.type.modify.kind === "data")
+        )) return;
+        schedule(directory);
+      }, { recursive: false }).then((unwatch) => {
+        if (disposed) unwatch();
+        else {
+          unwatchers.push(unwatch);
+          schedule(directory); // Catch changes made while the watcher was registering.
+        }
+      }).catch((err) => {
+        if (disposed) return;
+        console.error("Failed to watch directory; polling instead:", directory, err);
+        pollers.push(window.setInterval(() => schedule(directory), 2000));
+        schedule(directory);
+      });
+    }
+    const reconcile = () => directories.forEach(schedule);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") reconcile();
+    };
+    window.addEventListener("focus", reconcile);
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    return () => {
+      disposed = true;
+      for (const timer of timers.values()) window.clearTimeout(timer);
+      for (const unwatch of unwatchers) unwatch();
+      for (const poller of pollers) window.clearInterval(poller);
+      window.removeEventListener("focus", reconcile);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+    };
+  }, [watchedDirectories, refreshDir]);
 
   const renameNode = useCallback(
     async (node: FileNode, newName: string): Promise<string | null> => {
@@ -171,14 +237,8 @@ export function useFileExplorer() {
     async (dirPath: string) => {
       const node = findNode(root, dirPath);
       if (!node) return;
-      if (!node.children) {
-        try {
-          const children = await readDirEntries(dirPath);
-          setRoot((r) => updateTreeNode(r, dirPath, (n) => ({ ...n, children })));
-        } catch (err) {
-          console.error("Failed to read dir:", dirPath, err);
-          return;
-        }
+      if (!node.children || !expanded.has(dirPath)) {
+        if (!(await refreshDir(dirPath))) return;
       }
       setExpanded((prev) => {
         if (prev.has(dirPath)) return prev;
@@ -187,7 +247,7 @@ export function useFileExplorer() {
         return next;
       });
     },
-    [root, readDirEntries]
+    [root, expanded, refreshDir]
   );
 
   const expandTo = useCallback(

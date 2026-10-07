@@ -20,7 +20,7 @@ import AboutDialog from "./components/AboutDialog";
 import GlobalSearchPanel from "./components/GlobalSearchPanel";
 import MarkdownPreview from "./components/MarkdownPreview";
 import ResizeHandle from "./components/ResizeHandle";
-import { useTabs, type Tab } from "./hooks/useTabs";
+import { useTabs, isPathAffected, isTabUnsaved, type Tab } from "./hooks/useTabs";
 import { useFileExplorer, type FileNode } from "./hooks/useFileExplorer";
 import { useEditorState } from "./hooks/useEditorState";
 import { useTheme } from "./hooks/useTheme";
@@ -265,17 +265,25 @@ function App() {
   const handleRenameNode = useCallback(
     async (node: FileNode, newName: string) => {
       const newPath = await explorer.renameNode(node, newName);
-      if (newPath) renameOpenFile(node.path, newPath, newName);
+      if (newPath) renameOpenFile(node.path, newPath, newName, node.isDir);
     },
     [explorer, renameOpenFile]
   );
 
   const handleDeleteNode = useCallback(
     async (node: FileNode) => {
+      const unsaved = tabsRef.current.find((tab) =>
+        isPathAffected(tab.filePath, node.path, node.isDir) && isTabUnsaved(tab)
+      );
+      if (unsaved) {
+        activateTab(unsaved.id);
+        alert(t("explorer.deleteUnsaved", { name: unsaved.fileName }));
+        return;
+      }
       const ok = await explorer.deleteNode(node);
-      if (ok) closeOpenFile(node.path);
+      if (ok) closeOpenFile(node.path, node.isDir);
     },
-    [explorer, closeOpenFile]
+    [explorer, closeOpenFile, activateTab]
   );
 
   const [showSearch, setShowSearch] = useState(false);

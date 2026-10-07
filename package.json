@@ -1,13 +1,15 @@
 {
   "name": "betternotepad",
   "private": true,
-  "version": "0.4.5",
+  "version": "0.4.6",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "test:file-operations": "node --test scripts/file-operations.test.mjs",
+    "test:explorer-search": "node --test scripts/explorer-search.test.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
     "audit:strings": "node scripts/audit-strings.mjs"
   },

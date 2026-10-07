@@ -33,6 +33,18 @@ export function isTabUnsaved(tab: Tab): boolean {
     (tab.externalChange === "missing" && tab.content.length > 0);
 }
 
+export function isPathAffected(filePath: string | null, path: string, isDir = false): boolean {
+  if (!filePath) return false;
+  const normalize = (value: string) => {
+    const normalized = value.replace(/\\/g, "/").replace(/\/+$/, "");
+    // Windows drive and UNC paths are case-insensitive; POSIX paths are not.
+    return /^(?:[a-z]:|\/\/)/i.test(normalized) ? normalized.toLowerCase() : normalized;
+  };
+  const file = normalize(filePath);
+  const target = normalize(path);
+  return file === target || (isDir && file.startsWith(`${target}/`));
+}
+
 interface ReadFileResult {
   content: string;
   encoding: string;
@@ -859,21 +871,36 @@ export function useTabs(options?: { defaultEol?: Eol }) {
     [state, closeTab]
   );
 
-  const renameOpenFile = useCallback((oldPath: string, newPath: string, newName: string) => {
+  const renameOpenFile = useCallback((oldPath: string, newPath: string, newName: string, isDir = false) => {
+    const oldPrefix = oldPath.replace(/[\\/]+$/, "");
+    const newPrefix = newPath.replace(/[\\/]+$/, "");
     setState((s) => ({
       ...s,
-      tabs: s.tabs.map((t) =>
-        t.filePath === oldPath ? { ...t, filePath: newPath, fileName: newName, externalChange: undefined } : t
-      ),
+      tabs: s.tabs.map((t) => {
+        if (!t.filePath || !isPathAffected(t.filePath, oldPath, isDir)) return t;
+        return {
+          ...t,
+          filePath: isDir ? newPrefix + t.filePath.slice(oldPrefix.length) : newPath,
+          fileName: isDir ? t.fileName : newName,
+          // A watcher may observe the old path disappearing during our rename.
+          // Keep genuine content conflicts, but clear that transient missing state.
+          externalChange: t.externalChange === "missing" ? undefined : t.externalChange,
+        };
+      }),
     }));
   }, []);
 
-  const closeOpenFile = useCallback((path: string) => {
+  const closeOpenFile = useCallback((path: string, isDir = false) => {
     for (const tab of tabsRef.current) {
-      if (tab.filePath === path) editEpochRef.current.delete(tab.id);
+      if (isPathAffected(tab.filePath, path, isDir) && !tab.modified) editEpochRef.current.delete(tab.id);
     }
     setState((s) => {
-      const tabs = s.tabs.filter((t) => t.filePath !== path);
+      const tabs = s.tabs.flatMap((t) => {
+        if (!isPathAffected(t.filePath, path, isDir)) return [t];
+        // Editing can continue while the native deletion is in flight. Never
+        // discard those edits; leave a recoverable tab with the Save-As action.
+        return t.modified ? [{ ...t, externalChange: "missing" as const }] : [];
+      });
       if (tabs.length === 0) {
         const nt = createTab();
         return { tabs: [nt], activeTabId: nt.id };

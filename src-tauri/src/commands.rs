@@ -884,6 +884,14 @@ pub struct SearchFileResult {
     pub path: String,
     pub name: String,
     pub matches: Vec<SearchMatch>,
+    pub truncated: bool,
+}
+
+#[derive(Default, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SearchResults {
+    pub files: Vec<SearchFileResult>,
+    pub files_truncated: bool,
 }
 
 const SEARCH_MAX_FILES: usize = 100;
@@ -891,16 +899,18 @@ const SEARCH_MAX_MATCHES_PER_FILE: usize = 200;
 
 fn search_file(path: &Path, query: &str, case_sensitive: bool) -> Option<SearchFileResult> {
     let bytes = fs::read(path).ok()?;
-    if bytes.contains(&0) {
+    let (content, _) = decode_bytes(&bytes);
+    // UTF-16 text contains zero bytes on disk, but not necessarily NUL characters.
+    if content.contains('\0') {
         return None; // binary file
     }
-    let (content, _) = decode_bytes(&bytes);
     let needle = if case_sensitive {
         query.to_string()
     } else {
         query.to_lowercase()
     };
     let mut matches = Vec::new();
+    let mut truncated = false;
     for (i, raw) in content.lines().enumerate() {
         let line = raw.trim_end_matches('\r');
         let hay = if case_sensitive {
@@ -909,13 +919,15 @@ fn search_file(path: &Path, query: &str, case_sensitive: bool) -> Option<SearchF
             line.to_lowercase()
         };
         if hay.contains(&needle) {
+            // Look for one extra match so exactly 200 lines is not called truncated.
+            if matches.len() == SEARCH_MAX_MATCHES_PER_FILE {
+                truncated = true;
+                break;
+            }
             matches.push(SearchMatch {
                 line: (i + 1) as u32,
                 text: line.to_string(),
             });
-            if matches.len() >= SEARCH_MAX_MATCHES_PER_FILE {
-                break;
-            }
         }
     }
     if matches.is_empty() {
@@ -928,6 +940,7 @@ fn search_file(path: &Path, query: &str, case_sensitive: bool) -> Option<SearchF
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default(),
         matches,
+        truncated,
     })
 }
 
@@ -935,10 +948,10 @@ fn search_dir(
     dir: &Path,
     query: &str,
     case_sensitive: bool,
-    results: &mut Vec<SearchFileResult>,
+    results: &mut SearchResults,
     depth: usize,
 ) {
-    if depth > 32 || results.len() >= SEARCH_MAX_FILES {
+    if depth > 32 || results.files_truncated {
         return;
     }
     let entries = match fs::read_dir(dir) {
@@ -946,39 +959,39 @@ fn search_dir(
         Err(_) => return,
     };
     for entry in entries.flatten() {
-        if results.len() >= SEARCH_MAX_FILES {
+        if results.files_truncated {
             return;
         }
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') || matches!(name.as_str(), "node_modules" | "target" | "dist") {
-            continue;
-        }
         let ft = match entry.file_type() {
             Ok(t) => t,
             Err(_) => continue,
         };
         if ft.is_dir() {
+            if matches!(name.as_str(), ".git" | "node_modules" | "target" | "dist") {
+                continue;
+            }
             search_dir(&path, query, case_sensitive, results, depth + 1);
         } else if ft.is_file() {
             if let Some(r) = search_file(&path, query, case_sensitive) {
-                results.push(r);
+                if results.files.len() == SEARCH_MAX_FILES {
+                    results.files_truncated = true;
+                    return;
+                }
+                results.files.push(r);
             }
         }
     }
 }
 
 #[tauri::command]
-pub async fn search_in_files(
-    root: String,
-    query: String,
-    case_sensitive: bool,
-) -> Vec<SearchFileResult> {
+pub async fn search_in_files(root: String, query: String, case_sensitive: bool) -> SearchResults {
     if query.trim().is_empty() {
-        return Vec::new();
+        return SearchResults::default();
     }
     tauri::async_runtime::spawn_blocking(move || {
-        let mut results = Vec::new();
+        let mut results = SearchResults::default();
         search_dir(Path::new(&root), &query, case_sensitive, &mut results, 0);
         results
     })
@@ -989,6 +1002,109 @@ pub async fn search_in_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct SearchFixture(PathBuf);
+
+    impl SearchFixture {
+        fn new(name: &str) -> Self {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "betternotepad-search-{}-{}-{}",
+                name,
+                std::process::id(),
+                stamp
+            ));
+            fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+
+    impl Drop for SearchFixture {
+        fn drop(&mut self) {
+            let temp = std::env::temp_dir();
+            assert_eq!(self.0.parent(), Some(temp.as_path()));
+            assert!(self
+                .0
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("betternotepad-search-"));
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn cross_file_search_decodes_utf16_before_binary_detection() {
+        let dir = SearchFixture::new("encodings");
+        for encoding in ["utf-8", "utf-8-bom", "gbk", "utf-16le", "utf-16be"] {
+            let path = dir.0.join(format!("{}.txt", encoding));
+            fs::write(&path, encode_text("first\r\n你好 hello\r\n", encoding)).unwrap();
+            let result = search_file(&path, "你好", true).expect(encoding);
+            assert_eq!(result.matches[0].line, 2);
+            assert_eq!(result.matches[0].text, "你好 hello");
+        }
+        let binary = dir.0.join("binary.dat");
+        fs::write(&binary, b"hello\0world").unwrap();
+        assert!(search_file(&binary, "hello", false).is_none());
+        fs::write(&binary, encode_text("hello\0world", "utf-16le")).unwrap();
+        assert!(search_file(&binary, "hello", false).is_none());
+    }
+
+    #[test]
+    fn cross_file_search_includes_dotfiles_and_dotfolders() {
+        let dir = SearchFixture::new("dotfiles");
+        fs::create_dir(dir.0.join(".config")).unwrap();
+        fs::create_dir(dir.0.join(".git")).unwrap();
+        fs::write(dir.0.join(".env"), "hello").unwrap();
+        fs::write(dir.0.join(".gitignore"), "hello").unwrap();
+        fs::write(dir.0.join(".config").join("settings.txt"), "hello").unwrap();
+        fs::write(dir.0.join(".git").join("ignored.txt"), "hello").unwrap();
+        let mut results = SearchResults::default();
+        search_dir(&dir.0, "hello", true, &mut results, 0);
+        assert_eq!(results.files.len(), 3);
+    }
+
+    #[test]
+    fn cross_file_search_reports_only_actual_line_truncation() {
+        let dir = SearchFixture::new("line-limit");
+        let path = dir.0.join("lines.txt");
+        fs::write(&path, "hello\n".repeat(SEARCH_MAX_MATCHES_PER_FILE)).unwrap();
+        let exact = search_file(&path, "hello", true).unwrap();
+        assert_eq!(exact.matches.len(), SEARCH_MAX_MATCHES_PER_FILE);
+        assert!(!exact.truncated);
+
+        fs::write(&path, "hello\n".repeat(SEARCH_MAX_MATCHES_PER_FILE + 1)).unwrap();
+        let extra = search_file(&path, "hello", true).unwrap();
+        assert_eq!(extra.matches.len(), SEARCH_MAX_MATCHES_PER_FILE);
+        assert!(extra.truncated);
+    }
+
+    #[test]
+    fn cross_file_search_reports_only_actual_file_truncation() {
+        let dir = SearchFixture::new("file-limit");
+        fs::create_dir(dir.0.join("nested")).unwrap();
+        for i in 0..SEARCH_MAX_FILES {
+            fs::write(dir.0.join(format!("{}.txt", i)), "hello\n").unwrap();
+        }
+        fs::write(dir.0.join("no-match.txt"), "other\n").unwrap();
+        let mut exact = SearchResults::default();
+        search_dir(&dir.0, "hello", true, &mut exact, 0);
+        assert_eq!(exact.files.len(), SEARCH_MAX_FILES);
+        assert!(!exact.files_truncated);
+
+        fs::write(dir.0.join("nested").join("extra.txt"), "hello\n").unwrap();
+        let mut extra = SearchResults::default();
+        search_dir(&dir.0, "hello", true, &mut extra, 0);
+        assert_eq!(extra.files.len(), SEARCH_MAX_FILES);
+        assert!(extra.files_truncated);
+        let json = serde_json::to_value(extra).unwrap();
+        assert_eq!(json["filesTruncated"], true);
+        assert!(json["files"].is_array());
+        assert_eq!(json["files"][0]["truncated"], false);
+    }
 
     #[test]
     fn fingerprint_is_stable_and_detects_same_length_changes() {
@@ -1093,15 +1209,15 @@ mod tests {
         std::fs::write(dir.join("sub").join("b.py"), "print('hello again')\n").unwrap();
         std::fs::write(dir.join("skip.bin"), "abc\x00def").unwrap(); // binary -> skipped
 
-        let mut results = Vec::new();
+        let mut results = SearchResults::default();
         search_dir(&dir, "hello", false, &mut results, 0);
 
-        assert_eq!(results.len(), 2, "binary file must be skipped");
-        let a = results.iter().find(|r| r.name == "a.txt").unwrap();
+        assert_eq!(results.files.len(), 2, "binary file must be skipped");
+        let a = results.files.iter().find(|r| r.name == "a.txt").unwrap();
         assert_eq!(a.matches.len(), 1);
         assert_eq!(a.matches[0].line, 1);
         assert_eq!(a.matches[0].text, "hello world");
-        let b = results.iter().find(|r| r.name == "b.py").unwrap();
+        let b = results.files.iter().find(|r| r.name == "b.py").unwrap();
         assert_eq!(b.matches[0].line, 1);
         assert!(b.matches[0].text.contains("hello"));
 
@@ -1115,13 +1231,13 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("x.txt"), "Hello\n").unwrap();
 
-        let mut insensitive = Vec::new();
+        let mut insensitive = SearchResults::default();
         search_dir(&dir, "hello", false, &mut insensitive, 0);
-        assert_eq!(insensitive.len(), 1);
+        assert_eq!(insensitive.files.len(), 1);
 
-        let mut sensitive = Vec::new();
+        let mut sensitive = SearchResults::default();
         search_dir(&dir, "hello", true, &mut sensitive, 0);
-        assert!(sensitive.is_empty());
+        assert!(sensitive.files.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

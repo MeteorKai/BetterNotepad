@@ -11,6 +11,12 @@ interface SearchFileResult {
   path: string;
   name: string;
   matches: SearchMatch[];
+  truncated: boolean;
+}
+
+interface SearchResults {
+  files: SearchFileResult[];
+  filesTruncated: boolean;
 }
 
 interface GlobalSearchPanelProps {
@@ -35,7 +41,7 @@ function highlightLine(text: string, query: string) {
 export default function GlobalSearchPanel({ root, onOpenResult, onClose }: GlobalSearchPanelProps) {
   const [query, setQuery] = useState("");
   const [caseSensitive, setCaseSensitive] = useState(false);
-  const [results, setResults] = useState<SearchFileResult[] | null>(null);
+  const [results, setResults] = useState<SearchResults | null>(null);
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -54,7 +60,7 @@ export default function GlobalSearchPanel({ root, onOpenResult, onClose }: Globa
         return;
       }
       try {
-        const res = await invoke<SearchFileResult[]>("search_in_files", {
+        const res = await invoke<SearchResults>("search_in_files", {
           root,
           query: q,
           caseSensitive: cs,
@@ -91,7 +97,8 @@ export default function GlobalSearchPanel({ root, onOpenResult, onClose }: Globa
     inputRef.current?.focus();
   }, []);
 
-  const total = results?.reduce((n, r) => n + r.matches.length, 0) ?? 0;
+  const total = results?.files.reduce((n, r) => n + r.matches.length, 0) ?? 0;
+  const truncated = results?.filesTruncated || results?.files.some((r) => r.truncated);
 
   return (
     <div className="border-b border-line-soft bg-panel">
@@ -119,7 +126,7 @@ export default function GlobalSearchPanel({ root, onOpenResult, onClose }: Globa
           {searching
             ? t("globalSearch.searching")
             : total
-              ? t("globalSearch.results", { count: total, files: results?.length ?? 0 })
+              ? t("globalSearch.results", { count: total, files: results?.files.length ?? 0 })
               : query
                 ? t("globalSearch.noResults")
                 : ""}
@@ -136,11 +143,23 @@ export default function GlobalSearchPanel({ root, onOpenResult, onClose }: Globa
         </button>
       </div>
       {error && <div className="px-3 pb-2 text-xs text-danger">{error}</div>}
-      {root && results && results.length > 0 && (
+      {results && truncated && (
+        <div role="status" className="px-3 pb-2 text-xs text-warn">
+          {results.filesTruncated
+            ? t("globalSearch.filesTruncated", { count: results.files.length })
+            : t("globalSearch.partialResults")}
+        </div>
+      )}
+      {root && results && results.files.length > 0 && (
         <div className="max-h-[45vh] overflow-y-auto px-3 pb-2">
-          {results.map((r) => (
+          {results.files.map((r) => (
             <div key={r.path} className="mb-2">
               <div className="text-xs text-faint font-mono truncate mb-0.5">{r.path}</div>
+              {r.truncated && (
+                <div className="text-xs text-warn mb-1">
+                  {t("globalSearch.matchesTruncated", { count: r.matches.length })}
+                </div>
+              )}
               {r.matches.map((m) => (
                 <button
                   key={m.line}
