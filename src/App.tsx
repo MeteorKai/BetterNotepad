@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { ask } from "@tauri-apps/plugin-dialog";
 import Toolbar from "./components/Toolbar";
 import Editor, {
   clearEditorHistory,
@@ -27,6 +28,7 @@ import { useTheme } from "./hooks/useTheme";
 import { useEditorSettings } from "./hooks/useEditorSettings";
 import { useMascot } from "./hooks/useMascot";
 import { useRunner } from "./hooks/useRunner";
+import { useUpdater } from "./hooks/useUpdater";
 import { getI18nLocale, resolveLocale, setI18nLocale, t } from "./i18n";
 
 const LANGUAGE_BY_EXT: Record<string, string> = {
@@ -173,6 +175,41 @@ function App() {
   const firstTabIdRef = useRef(activeTab.id);
   const tabsRef = useRef(tabs);
   tabsRef.current = tabs;
+
+  const updater = useUpdater(async () => {
+    if (tabsRef.current.some(isTabUnsaved)) {
+      const approved = await ask(t("about.updateSavePrompt"), {
+        title: t("about.updates"), kind: "warning",
+        okLabel: t("about.updateSave"), cancelLabel: t("confirm.cancel"),
+      });
+      if (!approved || !await saveAll()) return false;
+      // Allow React to commit saved tabs before the final unsaved-content check.
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      if (tabsRef.current.some(isTabUnsaved)) return false;
+    }
+    if (runner.running || runner.shell) {
+      if (!await ask(t("about.updateTerminalPrompt"), {
+        title: t("about.updates"), kind: "warning",
+        okLabel: t("about.updateContinue"), cancelLabel: t("confirm.cancel"),
+      })) return false;
+    }
+    await runner.stop();
+    await runner.closeShell();
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    if (tabsRef.current.some(isTabUnsaved)) return false;
+    persistSessionNow();
+    return true;
+  });
+
+  useEffect(() => {
+    if (!updater.busy) return;
+    const blockKeys = (event: KeyboardEvent) => {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    };
+    window.addEventListener("keydown", blockKeys, true);
+    return () => window.removeEventListener("keydown", blockKeys, true);
+  }, [updater.busy]);
 
   // Files handed to us by the OS.
   //
@@ -741,6 +778,10 @@ function App() {
     let unlisten: (() => void) | undefined;
     getCurrentWindow()
       .onCloseRequested((event) => {
+        if (updater.busyRef.current) {
+          event.preventDefault();
+          return;
+        }
         if (unsavedTabsRef.current.length === 0) return;
         event.preventDefault();
         setAppClosingTabs(unsavedTabsRef.current);
@@ -774,7 +815,8 @@ function App() {
   }, []);
 
   return (
-    <div className="h-screen bg-surface text-ink flex flex-col select-none overflow-hidden">
+    <>
+    <div inert={updater.busy} className="h-screen bg-surface text-ink flex flex-col select-none overflow-hidden">
       <Toolbar
         onNew={newTab}
         onOpen={openTab}
@@ -1046,10 +1088,22 @@ function App() {
           editorSettings={editorSettings}
           onSetEditor={setEditorSettings}
           onClose={() => setSettingsOpen(false)}
+          updater={updater}
         />
       )}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}
     </div>
+    {updater.busy && (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-[2px]">
+        <div role="dialog" aria-modal="true" aria-label={t("about.updates")} className="w-[400px] max-w-[90vw] rounded-2xl border border-line bg-elevated p-6 shadow-2xl space-y-3">
+          <h2 className="text-sm font-semibold text-ink">{t("about.updates")}</h2>
+          <p role="status" aria-live="polite" className="text-sm text-sub">{updater.message}</p>
+          {updater.state.phase === "downloading" && <progress className="w-full accent-[var(--accent)]" max={100} value={updater.percent ?? undefined} aria-label={updater.message} />}
+          <p className="text-xs text-faint">{t("about.updateWait")}</p>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 

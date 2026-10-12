@@ -24,9 +24,10 @@ const tab = (filePath, patch = {}) => ({
 // survives renders; effects, native dialogs and filesystem I/O are mocked.
 function harness(initialTabs, operations = {}) {
   const slots = [];
-  const calls = { deletes: [], renames: [], writes: [], alerts: [] };
+  const calls = { deletes: [], renames: [], writes: [], alerts: [], prompts: [], stops: [] };
   let cursor = 0;
   let tabs;
+  let prepareUpdate;
   const storage = new Map([["betternotepad.session", JSON.stringify({ version: 1, activeIndex: 0, tabs: initialTabs })]]);
   const react = {
     useState(initial) {
@@ -55,7 +56,7 @@ function harness(initialTabs, operations = {}) {
   };
   const localStorage = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
   const invoke = async (command, args) => {
-    if (command === "write_file") { calls.writes.push(args); return "saved-disk"; }
+    if (command === "write_file") { calls.writes.push(args); return operations.writeFile ? operations.writeFile(args) : "saved-disk"; }
     throw new Error(`Unexpected native command: ${command}`);
   };
   const cache = new Map();
@@ -67,6 +68,11 @@ function harness(initialTabs, operations = {}) {
       if (id === "react") return react;
       if (id === "react/jsx-runtime") return require(id);
       if (id === "@tauri-apps/api/core") return { invoke };
+      if (id === "@tauri-apps/plugin-dialog") return { ask: async (message) => {
+        calls.prompts.push(message);
+        if (operations.onAsk) operations.onAsk(result);
+        return operations.approve !== false;
+      } };
       if (id.startsWith("@tauri-apps/")) return {};
       if (id === "../i18n" || id === "./i18n") return load("src/i18n/index.ts");
       if (id === "./hooks/useTabs") {
@@ -78,12 +84,19 @@ function harness(initialTabs, operations = {}) {
       if (id === "./hooks/useEditorState") return { useEditorState: () => ({ cursorLine: 1, cursorCol: 1, totalLines: 1 }) };
       if (id === "./hooks/useTheme") return { useTheme: () => ({ theme: "light" }) };
       if (id === "./hooks/useMascot") return { useMascot: () => ({ visible: false }) };
-      if (id === "./hooks/useRunner") return { useRunner: () => ({ running: false, config: [] }) };
+      if (id === "./hooks/useRunner") return { useRunner: () => ({ running: operations.running ?? false, config: [],
+        stop: async () => { calls.stops.push("run"); }, closeShell: async () => { calls.stops.push("shell"); },
+      }) };
+      if (id === "./hooks/useUpdater") return { useUpdater: (prepare) => {
+        prepareUpdate = prepare; return { busy: false, busyRef: { current: false } };
+      } };
       if (id.startsWith("./components/")) return { __esModule: true, default: id.slice("./components/".length) };
       throw new Error(`Unexpected import: ${id}`);
     };
     new Function("require", "module", "exports", "window", "localStorage", "alert", compiled.get(file))(
-      mockRequire, module, module.exports, { __TAURI_INTERNALS__: {}, setTimeout: () => 1 }, localStorage,
+      mockRequire, module, module.exports, { __TAURI_INTERNALS__: {}, setTimeout: () => 1,
+        requestAnimationFrame: (callback) => { result.render(); callback(); },
+      }, localStorage,
       (message) => calls.alerts.push(message),
     );
     return module.exports;
@@ -97,6 +110,7 @@ function harness(initialTabs, operations = {}) {
   const result = {
     calls,
     get tabs() { return tabs; },
+    prepareUpdate: () => prepareUpdate(),
     render() { cursor = 0; result.explorer = findExplorer(App()); },
   };
   result.render();
@@ -210,4 +224,38 @@ test("failed rename leaves descendant paths unchanged", async () => {
   await h.explorer.onRename(node(folder, true), "new");
   h.render();
   assert.equal(h.tabs.tabs, before);
+});
+
+test("update save prompt cancellation preserves all drafts and stops no terminals", async () => {
+  const h = harness([tab(`${folder}\\a.txt`, { modified: true, content: "draft" })], { approve: false });
+  assert.equal(await h.prepareUpdate(), false);
+  assert.equal(h.calls.writes.length, 0);
+  assert.deepEqual(h.calls.stops, []);
+  assert.equal(h.tabs.activeTab.content, "draft");
+});
+
+test("update saves all dirty tabs before persisting and stopping terminals", async () => {
+  const h = harness([tab(`${folder}\\a.txt`, { modified: true }), tab(`${folder}\\b.txt`, { modified: true })]);
+  assert.equal(await h.prepareUpdate(), true);
+  assert.equal(h.calls.writes.length, 2);
+  assert.equal(h.tabs.unsavedTabs.length, 0);
+  assert.deepEqual(h.calls.stops, ["run", "shell"]);
+});
+
+test("failed update save and declined terminal shutdown both stop installation", async () => {
+  const failed = harness([tab(`${folder}\\a.txt`, { modified: true })], { writeFile: () => { throw new Error("disk full"); } });
+  assert.equal(await failed.prepareUpdate(), false);
+  assert.deepEqual(failed.calls.stops, []);
+  const running = harness([tab(`${folder}\\a.txt`)], { running: true, approve: false });
+  assert.equal(await running.prepareUpdate(), false);
+  assert.deepEqual(running.calls.stops, []);
+});
+
+test("new unsaved content appearing during restart confirmation blocks installation", async () => {
+  const h = harness([tab(`${folder}\\a.txt`)], { running: true, onAsk: (current) => {
+    current.tabs.setActiveContent("late change"); current.render();
+  } });
+  assert.equal(await h.prepareUpdate(), false);
+  assert.equal(h.tabs.activeTab.content, "late change");
+  assert.equal(h.tabs.activeTab.modified, true);
 });

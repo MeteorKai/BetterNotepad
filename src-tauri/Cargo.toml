@@ -1,6 +1,6 @@
 [package]
 name = "notepad-app"
-version = "0.4.6"
+version = "0.4.7"
 description = "A beautiful notepad application"
 authors = ["you"]
 edition = "2021"
@@ -29,6 +29,10 @@ tauri-plugin-opener = "2"
 # a ConPTY on Windows / openpty elsewhere, so it stops block-buffering and emits
 # ANSI sequences we can render with xterm.js.
 portable-pty = "0.9"
+tauri-plugin-updater = "~2.12.0"
+# Retain HTTP status information when the updater reports an opaque endpoint failure.
+reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring"] }
 
 [target.'cfg(windows)'.dependencies]
 # Explorer context-menu integration. Already in the tree as a transitive

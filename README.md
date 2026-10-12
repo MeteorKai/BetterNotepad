@@ -85,6 +85,8 @@ Tauri 2 · Rust · React 19 · TypeScript · CodeMirror 6 · Tailwind CSS 4 · x
 
 ## 更新与反馈
 
-BetterNotepad **不在应用内自动安装更新**。“设置 → About → 检查更新”会打开 Releases 页面，由你选择是否下载新版本。
+从包含更新功能的新版开始，“设置 → 常规 → 检查更新”会检查 GitHub 正式版本，自动下载并校验安装包，在处理未保存内容后覆盖安装并重启。旧版需先手动安装一次新版；直接运行构建目录中的 EXE 不支持自动安装。
+
+发布新版需要同时提供安装包、签名和 `latest.json`，详见 **[自动更新发布说明](docs/UPDATING.md)**。
 
 发现问题或有功能建议？欢迎在 [Issues](https://github.com/MeteorKai/BetterNotepad/issues) 交流。项目采用 Apache-2.0 许可证。

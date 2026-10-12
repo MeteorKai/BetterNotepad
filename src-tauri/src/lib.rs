@@ -3,6 +3,8 @@ mod commands;
 mod pty;
 mod runlog;
 mod shell_menu;
+mod update_diagnostics;
+mod update_installation;
 
 use tauri::{Emitter, Manager};
 
@@ -40,6 +42,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(commands::RunState::default())
         .manage(commands::StdinState::default())
         .manage(pty::PtyState::default())
@@ -69,6 +72,8 @@ pub fn run() {
             shell_menu::context_menu_enabled,
             shell_menu::context_menu_command,
             shell_menu::set_context_menu,
+            update_installation::update_installation_supported,
+            update_diagnostics::update_endpoint_status,
         ])
         .on_window_event(|window, event| {
             // Tear down terminal sessions before the process goes away. Dropping

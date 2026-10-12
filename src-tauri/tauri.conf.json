@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/nicedoc/tauri/v2/core/tauri-config-schema/schema.json",
   "productName": "BetterNotepad",
-  "version": "0.4.6",
+  "version": "0.4.7",
   "identifier": "com.betternotepad.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -11,6 +11,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": ["nsis"],
     "icon": ["icons/icon.ico", "icons/icon.png"],
     "windows": {
@@ -47,6 +48,15 @@
     }
   },
   "plugins": {
-    "fs": {}
+    "fs": {},
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkwQTExRjBDRDk1MUQ1OEMKUldTTTFWSFpEQitoa0RrK3dUZk5hZ2JUQ25iTS9aQVpwZ2J0QXpmMVBrVEJlVEFTV0dXL1ZBUFoK",
+      "endpoints": [
+        "https://github.com/MeteorKai/BetterNotepad/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

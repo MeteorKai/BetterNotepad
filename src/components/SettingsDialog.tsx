@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
+import type { AppUpdater } from "../hooks/useUpdater";
 import type { InterpreterConfig, ShellInfo } from "../hooks/useRunner";
 import { t, type LocaleSetting } from "../i18n";
 import {
@@ -21,6 +21,7 @@ interface SettingsDialogProps {
     patch: Partial<EditorSettings> | ((prev: EditorSettings) => Partial<EditorSettings>)
   ) => void;
   onClose: () => void;
+  updater: AppUpdater;
 }
 
 function Segmented<T extends string>({
@@ -268,18 +269,18 @@ function EditorSettingsPanel({
   );
 }
 
-const RELEASES_URL = "https://github.com/MeteorKai/BetterNotepad/releases";
-
 function AboutPanel({
   locale,
   onSetLocale,
   contextMenu,
   onSetContextMenu,
+  updater,
 }: {
   locale: LocaleSetting;
   onSetLocale: (locale: LocaleSetting) => void;
   contextMenu: boolean;
   onSetContextMenu: (enabled: boolean) => void;
+  updater: AppUpdater;
 }) {
   const [version, setVersion] = useState("");
 
@@ -287,17 +288,6 @@ function AboutPanel({
     if (!("__TAURI_INTERNALS__" in window)) return;
     getVersion().then(setVersion).catch(() => {});
   }, []);
-
-  // There is no in-app updater any more: "check for updates" just hands the
-  // user off to the project's GitHub page, where every release and its notes
-  // live. Same pattern as the homepage button in AboutDialog.
-  const openReleases = () => {
-    if ("__TAURI_INTERNALS__" in window) {
-      openUrl(RELEASES_URL).catch(() => {});
-    } else {
-      window.open(RELEASES_URL, "_blank", "noreferrer");
-    }
-  };
 
   return (
     <div className="space-y-4">
@@ -334,13 +324,21 @@ function AboutPanel({
       <div className="space-y-1.5">
         <Row label={t("about.updates")}>
           <button
-            onClick={openReleases}
-            className="px-3 py-1 rounded-md text-xs font-medium text-accent-ink bg-accent hover:bg-accent-strong transition-colors"
+            onClick={updater.checkAndInstall}
+            disabled={updater.busy}
+            className="px-3 py-1 rounded-md text-xs font-medium text-accent-ink bg-accent hover:bg-accent-strong transition-colors disabled:opacity-50"
           >
             {t("about.check")}
           </button>
         </Row>
         <p className="text-[11px] text-faint leading-relaxed">{t("about.checkHint")}</p>
+        {updater.message && <p role={updater.state.phase === "error" ? "alert" : "status"} className="text-xs text-sub break-words">{updater.message}</p>}
+        {updater.state.error && (
+          <details className="text-[11px] text-faint">
+            <summary className="cursor-pointer">{t("about.updateDetails")}</summary>
+            <pre className="mt-1 whitespace-pre-wrap break-all select-text">{updater.state.error}</pre>
+          </details>
+        )}
       </div>
     </div>
   );
@@ -354,6 +352,7 @@ export default function SettingsDialog({
   shells,
   onSetEditor,
   onClose,
+  updater,
 }: SettingsDialogProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
   const [tab, setTab] = useState<"editor" | "interpreters" | "about">("editor");
@@ -460,6 +459,7 @@ export default function SettingsDialog({
               onSetLocale={(locale) => onSetEditor({ locale })}
               contextMenu={editorSettings.contextMenu}
               onSetContextMenu={(contextMenu) => onSetEditor({ contextMenu })}
+              updater={updater}
             />
           ) : (
             <>
