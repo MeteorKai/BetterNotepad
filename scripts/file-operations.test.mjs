@@ -33,7 +33,12 @@ function harness(initialTabs, operations = {}) {
     useState(initial) {
       const index = cursor++;
       if (!(index in slots)) slots[index] = typeof initial === "function" ? initial() : initial;
-      return [slots[index], (update) => { slots[index] = typeof update === "function" ? update(slots[index]) : update; }];
+      return [slots[index], (update) => {
+        const previous = slots[index];
+        const next = typeof update === "function" ? update(previous) : update;
+        if (operations.replayStateUpdater && typeof update === "function") update(previous);
+        slots[index] = next;
+      }];
     },
     useRef(initial) {
       const index = cursor++;
@@ -57,6 +62,8 @@ function harness(initialTabs, operations = {}) {
   const localStorage = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
   const invoke = async (command, args) => {
     if (command === "write_file") { calls.writes.push(args); return operations.writeFile ? operations.writeFile(args) : "saved-disk"; }
+    if (command === "read_file") return operations.readFile ? operations.readFile(args.path) : { content: "opened", encoding: "utf-8", fingerprint: "disk" };
+    if (command === "get_file_name") return String(args.path).split(/[\\/]/).pop();
     throw new Error(`Unexpected native command: ${command}`);
   };
   const cache = new Map();
@@ -107,11 +114,21 @@ function harness(initialTabs, operations = {}) {
     if (Array.isArray(element)) return element.map(findExplorer).find(Boolean);
     return element.type === "FileExplorer" ? element.props : findExplorer(element.props?.children);
   }
+  function findTabBar(element) {
+    if (!element) return null;
+    if (Array.isArray(element)) return element.map(findTabBar).find(Boolean);
+    return element.type === "TabBar" ? element.props : findTabBar(element.props?.children);
+  }
   const result = {
     calls,
     get tabs() { return tabs; },
     prepareUpdate: () => prepareUpdate(),
-    render() { cursor = 0; result.explorer = findExplorer(App()); },
+    render() {
+      cursor = 0;
+      const tree = App();
+      result.explorer = findExplorer(tree);
+      result.tabBar = findTabBar(tree);
+    },
   };
   result.render();
   return result;
@@ -249,6 +266,146 @@ test("failed update save and declined terminal shutdown both stop installation",
   const running = harness([tab(`${folder}\\a.txt`)], { running: true, approve: false });
   assert.equal(await running.prepareUpdate(), false);
   assert.deepEqual(running.calls.stops, []);
+});
+
+test("reopens recently closed tabs in LIFO order at their original position", () => {
+  const h = harness([tab("D:\\work\\a.txt"), tab("D:\\work\\b.txt"), tab("D:\\work\\c.txt")]);
+  const b = h.tabs.tabs[1].id;
+  const c = h.tabs.tabs[2].id;
+  h.tabs.closeTab(b);
+  h.render();
+  h.tabs.closeTab(c);
+  h.render();
+  assert.equal(h.tabs.canReopenClosedTab, true);
+  h.tabs.reopenClosedTab();
+  h.render();
+  assert.deepEqual(h.tabs.tabs.map((t) => t.filePath), ["D:\\work\\a.txt", "D:\\work\\c.txt"]);
+  h.tabs.reopenClosedTab();
+  h.render();
+  assert.deepEqual(h.tabs.tabs.map((t) => t.filePath), ["D:\\work\\a.txt", "D:\\work\\b.txt", "D:\\work\\c.txt"]);
+});
+
+test("reopening replaces the sole default placeholder and keeps a closed draft", () => {
+  const h = harness([tab("D:\\work\\draft.txt", { content: "draft", modified: true, encoding: "gbk", eol: "crlf", externalChange: "missing" })]);
+  const id = h.tabs.activeTabId;
+  h.tabs.requestClose(id);
+  h.render();
+  h.tabs.confirmPendingClose(false);
+  h.render();
+  assert.equal(h.tabs.tabs.length, 1);
+  assert.equal(h.tabs.tabs[0].filePath, null);
+  h.tabs.reopenClosedTab();
+  h.render();
+  assert.equal(h.tabs.tabs.length, 1);
+  assert.equal(h.tabs.activeTab.filePath, "D:\\work\\draft.txt");
+  assert.notEqual(h.tabs.activeTab.id, id);
+  assert.equal(h.tabs.activeTab.content, "draft");
+  assert.equal(h.tabs.activeTab.modified, true);
+  assert.equal(h.tabs.activeTab.encoding, "gbk");
+  assert.equal(h.tabs.activeTab.eol, "crlf");
+  assert.equal(h.tabs.activeTab.externalChange, "missing");
+});
+
+test("cancelled or failed close confirmation does not add closed history", async () => {
+  const cancelled = harness([tab("D:\\work\\draft.txt", { content: "draft", modified: true })]);
+  cancelled.tabs.requestClose(cancelled.tabs.activeTabId);
+  cancelled.render();
+  cancelled.tabs.cancelPendingClose();
+  cancelled.render();
+  assert.equal(cancelled.tabs.canReopenClosedTab, false);
+
+  const failed = harness([tab("D:\\work\\draft.txt", { content: "draft", modified: true })], { writeFile: () => { throw new Error("disk full"); } });
+  failed.tabs.requestClose(failed.tabs.activeTabId);
+  failed.render();
+  await failed.tabs.confirmPendingClose(true);
+  failed.render();
+  assert.equal(failed.tabs.tabs.length, 1);
+  assert.equal(failed.tabs.canReopenClosedTab, false);
+});
+
+test("duplicate close updater calls add history only once", () => {
+  const h = harness([tab("D:\\work\\a.txt")], { replayStateUpdater: true });
+  h.tabs.closeTab(h.tabs.activeTabId);
+  h.render();
+  h.tabs.reopenClosedTab();
+  h.render();
+  assert.equal(h.tabs.tabs.filter((t) => t.filePath === "D:\\work\\a.txt").length, 1);
+  assert.equal(h.tabs.canReopenClosedTab, false);
+});
+
+test("automatic placeholder cleanup does not add closed history", () => {
+  const h = harness([tab("D:\\work\\a.txt")]);
+  h.tabs.closeTab(h.tabs.activeTabId, false);
+  h.render();
+  assert.equal(h.tabs.tabs.length, 1);
+  assert.equal(h.tabs.tabs[0].filePath, null);
+  assert.equal(h.tabs.canReopenClosedTab, false);
+});
+
+test("closed history is capped and physical deletion does not remember tabs", () => {
+  const many = harness(Array.from({ length: 22 }, (_, i) => tab(`D:\\work\\${i}.txt`)));
+  for (let i = 0; i < 22; i += 1) {
+    many.tabs.closeTab(many.tabs.tabs[0].id);
+    many.render();
+  }
+  for (let i = 0; i < 20; i += 1) {
+    many.tabs.reopenClosedTab();
+    many.render();
+  }
+  assert.equal(many.tabs.canReopenClosedTab, false);
+  const deleted = harness([tab("D:\\work\\gone.txt")]);
+  deleted.tabs.closeOpenFile("D:\\work\\gone.txt");
+  deleted.render();
+  assert.equal(deleted.tabs.canReopenClosedTab, false);
+});
+
+test("opening a Windows path alias reuses the existing draft tab", async () => {
+  const h = harness([tab("D:\\work\\a.txt", { content: "draft", modified: true })]);
+  await h.tabs.openPaths(["d:/WORK/a.txt"]);
+  h.render();
+  assert.equal(h.tabs.tabs.length, 1);
+  assert.equal(h.tabs.activeTab.filePath, "D:\\work\\a.txt");
+  assert.equal(h.tabs.activeTab.content, "draft");
+  assert.equal(h.tabs.activeTab.modified, true);
+});
+
+test("reopening a closed path alias does not duplicate an opened tab", async () => {
+  const h = harness([tab("D:\\work\\a.txt")]);
+  h.tabs.closeTab(h.tabs.activeTabId);
+  h.render();
+  await h.tabs.openPaths(["d:/WORK/a.txt"]);
+  h.render();
+  assert.equal(h.tabs.tabs.filter((tab) => tab.filePath && tab.filePath.toLowerCase().replace(/\\/g, "/") === "d:/work/a.txt").length, 1);
+  h.tabs.reopenClosedTab();
+  h.render();
+  assert.equal(h.tabs.tabs.filter((tab) => tab.filePath && tab.filePath.toLowerCase().replace(/\\/g, "/") === "d:/work/a.txt").length, 1);
+  assert.equal(h.tabs.activeTab.filePath, "d:/WORK/a.txt");
+  assert.equal(h.tabs.canReopenClosedTab, false);
+});
+
+test("reopening an already open path only activates it without replacing edits", async () => {
+  const h = harness([tab("D:\\work\\a.txt"), tab("D:\\work\\b.txt")]);
+  h.tabs.closeTab(h.tabs.tabs[0].id);
+  h.render();
+  await h.tabs.openPaths(["D:\\work\\a.txt"]);
+  h.render();
+  const current = h.tabs.tabs.find((t) => t.filePath === "D:\\work\\a.txt");
+  h.tabs.activateTab(current.id);
+  h.tabs.setActiveContent("current edits");
+  h.render();
+  h.tabs.reopenClosedTab();
+  h.render();
+  assert.equal(h.tabs.activeTabId, current.id);
+  assert.equal(h.tabs.activeTab.content, "current edits");
+});
+
+test("App passes closed-tab restore state to TabBar", () => {
+  const h = harness([tab("D:\\work\\a.txt")]);
+  assert.equal(h.tabBar.canReopenClosedTab, false);
+  h.tabs.closeTab(h.tabs.activeTabId);
+  h.render();
+  assert.equal(h.tabBar.canReopenClosedTab, true);
+  assert.equal(typeof h.tabBar.onReopenClosedTab, "function");
 });
 
 test("new unsaved content appearing during restart confirmation blocks installation", async () => {

@@ -26,6 +26,7 @@ export interface Tab {
   externalChange?: "changed" | "missing";
   reloadRevision?: number;
   needsDiskLoad?: boolean;
+  isDefaultPlaceholder?: boolean;
 }
 
 export function isTabUnsaved(tab: Tab): boolean {
@@ -77,7 +78,15 @@ function normalizeEol(content: string, eol: Eol): string {
 interface TabsState {
   tabs: Tab[];
   activeTabId: string;
+  closedTabs: ClosedTab[];
 }
+
+interface ClosedTab {
+  tab: Tab;
+  index: number;
+}
+
+const CLOSED_TABS_MAX = 20;
 
 let idCounter = 0;
 function newId(): string {
@@ -88,7 +97,7 @@ function newId(): string {
 function createTab(): Tab {
   // The placeholder name is shown as the tab label and used as the Save-As
   // default, so it follows the current UI language.
-  return { id: newId(), filePath: null, fileName: t("tab.untitled"), content: "", modified: false, encoding: "utf-8" };
+  return { id: newId(), filePath: null, fileName: t("tab.untitled"), content: "", modified: false, encoding: "utf-8", isDefaultPlaceholder: true };
 }
 
 // Built lazily: the filter captions appear in the native file dialog and
@@ -127,7 +136,7 @@ interface SessionSnapshot {
   tabs: SessionEntry[];
 }
 
-function buildSession(state: TabsState): SessionSnapshot {
+function buildSession(state: Pick<TabsState, "tabs" | "activeTabId">): SessionSnapshot {
   return {
     version: SESSION_VERSION,
     activeIndex: Math.max(0, state.tabs.findIndex((t) => t.id === state.activeTabId)),
@@ -223,11 +232,11 @@ export function useTabs(options?: { defaultEol?: Eol }) {
         }));
       if (tabs.length > 0) {
         const activeIndex = Math.min(Math.max(0, saved.activeIndex), tabs.length - 1);
-        return { tabs, activeTabId: tabs[activeIndex].id };
+        return { tabs, activeTabId: tabs[activeIndex].id, closedTabs: [] };
       }
     }
     const first = createTab();
-    return { tabs: [first], activeTabId: first.id };
+    return { tabs: [first], activeTabId: first.id, closedTabs: [] };
   });
 
   const activeTab = state.tabs.find((t) => t.id === state.activeTabId) ?? state.tabs[0];
@@ -506,6 +515,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
           ...t,
           content,
           modified: true,
+          isDefaultPlaceholder: false,
           externalChange: (t.reloadRevision ?? 0) !== renderedRevision ? "changed" : t.externalChange,
         } : t
       ),
@@ -515,7 +525,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
   const renameTab = useCallback((id: string, fileName: string) => {
     setState((s) => ({
       ...s,
-      tabs: s.tabs.map((t) => (t.id === id ? { ...t, fileName } : t)),
+      tabs: s.tabs.map((t) => (t.id === id ? { ...t, fileName, isDefaultPlaceholder: false } : t)),
     }));
   }, []);
 
@@ -526,7 +536,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
 
   const newTab = useCallback(() => {
     const nt = createTab();
-    setState((s) => ({ tabs: [...s.tabs, nt], activeTabId: nt.id }));
+    setState((s) => ({ ...s, tabs: [...s.tabs, nt], activeTabId: nt.id }));
   }, []);
 
   const addTabs = useCallback(
@@ -537,7 +547,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
         let activeTabId = s.activeTabId;
         for (const item of loaded) {
           const existing = item.filePath
-            ? tabs.find((t) => t.filePath === item.filePath)
+            ? tabs.find((t) => t.filePath && isPathAffected(t.filePath, item.filePath!))
             : undefined;
           if (existing) {
             activeTabId = existing.id;
@@ -574,7 +584,7 @@ export function useTabs(options?: { defaultEol?: Eol }) {
             activeTabId = tab.id;
           }
         }
-        return { tabs, activeTabId };
+        return { ...s, tabs, activeTabId };
       });
     },
     []
@@ -843,21 +853,54 @@ export function useTabs(options?: { defaultEol?: Eol }) {
 
   const [pendingClose, setPendingClose] = useState<Tab | null>(null);
 
-  const closeTab = useCallback((id: string) => {
+  const closeTab = useCallback((id: string, remember = true) => {
     editEpochRef.current.delete(id);
+    const placeholder = createTab();
     setState((s) => {
       const idx = s.tabs.findIndex((t) => t.id === id);
       if (idx === -1) return s;
+      const closedTabs = remember
+        ? [...s.closedTabs, { tab: { ...s.tabs[idx] }, index: idx }].slice(-CLOSED_TABS_MAX)
+        : s.closedTabs;
       const tabs = s.tabs.filter((t) => t.id !== id);
       if (tabs.length === 0) {
-        const nt = createTab();
-        return { tabs: [nt], activeTabId: nt.id };
+        return { ...s, tabs: [placeholder], activeTabId: placeholder.id, closedTabs };
       }
       const activeTabId =
         s.activeTabId === id ? tabs[Math.min(idx, tabs.length - 1)].id : s.activeTabId;
-      return { tabs, activeTabId };
+      return { ...s, tabs, activeTabId, closedTabs };
     });
   }, []);
+
+  const reopenClosedTab = useCallback(() => {
+    const restoredId = newId();
+    setState((s) => {
+      const entry = s.closedTabs[s.closedTabs.length - 1];
+      if (!entry) return s;
+
+      const closedTabs = s.closedTabs.slice(0, -1);
+      const existing = entry.tab.filePath
+        ? s.tabs.find((tab) => tab.filePath && isPathAffected(tab.filePath, entry.tab.filePath!))
+        : undefined;
+      if (existing) return { ...s, activeTabId: existing.id, closedTabs };
+
+      const restored: Tab = { ...entry.tab, id: restoredId };
+      const placeholder = s.tabs.length === 1 &&
+        s.tabs[0].filePath === null &&
+        s.tabs[0].content === "" &&
+        s.tabs[0].modified === false &&
+        s.tabs[0].isDefaultPlaceholder === true;
+      if (placeholder) {
+        return { ...s, tabs: [restored], activeTabId: restored.id, closedTabs };
+      }
+
+      const index = Math.max(0, Math.min(entry.index, s.tabs.length));
+      const tabs = [...s.tabs];
+      tabs.splice(index, 0, restored);
+      return { ...s, tabs, activeTabId: restored.id, closedTabs };
+    });
+    scheduleReconcile();
+  }, [scheduleReconcile]);
 
   const requestClose = useCallback(
     (id: string) => {
@@ -903,12 +946,12 @@ export function useTabs(options?: { defaultEol?: Eol }) {
       });
       if (tabs.length === 0) {
         const nt = createTab();
-        return { tabs: [nt], activeTabId: nt.id };
+        return { ...s, tabs: [nt], activeTabId: nt.id };
       }
       const activeTabId = tabs.some((t) => t.id === s.activeTabId)
         ? s.activeTabId
         : tabs[0].id;
-      return { tabs, activeTabId };
+      return { ...s, tabs, activeTabId };
     });
   }, []);
 
@@ -955,6 +998,8 @@ export function useTabs(options?: { defaultEol?: Eol }) {
     persistSessionNow,
     discardUnsavedFromSession,
     closeTab,
+    canReopenClosedTab: state.closedTabs.length > 0,
+    reopenClosedTab,
     requestClose,
     renameOpenFile,
     closeOpenFile,

@@ -31,6 +31,7 @@ const en: Dict = {
   "tab.new": "New tab",
   "tab.newTitle": "New tab (Ctrl+N)",
   "tab.close": "Close tab",
+  "tab.reopenClosed": "Reopen closed tab",
   "tab.untitled": "Untitled",
 
   "toolbar.new": "New",
@@ -363,6 +364,7 @@ const zh: Dict = {
   "tab.new": "新建标签",
   "tab.newTitle": "新建标签（Ctrl+N）",
   "tab.close": "关闭标签",
+  "tab.reopenClosed": "重新打开关闭的标签",
   "tab.untitled": "未命名",
 
   "toolbar.new": "新建",

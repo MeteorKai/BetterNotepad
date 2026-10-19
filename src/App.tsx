@@ -139,6 +139,8 @@ function App() {
     discardUnsavedFromSession,
     requestClose,
     closeTab,
+    canReopenClosedTab,
+    reopenClosedTab,
     renameOpenFile,
     closeOpenFile,
     pendingClose,
@@ -229,8 +231,8 @@ function App() {
       await openPaths(paths);
       // The initial blank tab has served its purpose once a real file is open.
       const first = tabsRef.current.find((t) => t.id === firstTabIdRef.current);
-      if (first && first.content === "" && first.filePath === null) {
-        closeTab(first.id);
+      if (first && first.isDefaultPlaceholder === true && !first.modified && first.content === "" && first.filePath === null) {
+        closeTab(first.id, false);
       }
     };
 
@@ -854,6 +856,8 @@ function App() {
         onNew={newTab}
         onRename={renameTab}
         onMoveTab={moveTab}
+        canReopenClosedTab={canReopenClosedTab}
+        onReopenClosedTab={reopenClosedTab}
       />
       {showSearch && (
         <SearchBar

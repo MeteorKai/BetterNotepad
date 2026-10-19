@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import EditorContextMenu from "./EditorContextMenu";
 import type { Tab } from "../hooks/useTabs";
 import { t } from "../i18n";
 
@@ -10,6 +11,8 @@ interface TabBarProps {
   onNew: () => void;
   onRename: (id: string, fileName: string) => void;
   onMoveTab: (id: string, beforeId?: string) => void;
+  canReopenClosedTab: boolean;
+  onReopenClosedTab: () => void;
 }
 
 // HTML5 drag-and-drop is unreliable inside Tauri's WebView2 (dragstart often
@@ -30,10 +33,13 @@ export default function TabBar({
   onNew,
   onRename,
   onMoveTab,
+  canReopenClosedTab,
+  onReopenClosedTab,
 }: TabBarProps) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const [dragId, setDragId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const skipBlurRef = useRef(false);
   const dragRef = useRef<DragState | null>(null);
@@ -137,8 +143,16 @@ export default function TabBar({
   }, [dragId, onMoveTab]);
 
   return (
-    <div className="h-11 bg-panel-2 flex items-center px-2 border-b border-line-soft overflow-x-auto">
-      <div className="flex items-center min-h-full gap-1">
+    <div className="relative h-11">
+      <div
+        className="h-11 bg-panel-2 flex items-center px-2 border-b border-line-soft overflow-x-auto"
+        onContextMenu={(e) => {
+          if ((e.target as HTMLElement).closest("[data-tab-id], button, input")) return;
+          e.preventDefault();
+          setContextMenu({ x: e.clientX, y: e.clientY });
+        }}
+      >
+        <div className="flex items-center min-h-full gap-1">
         {tabs.map((tab) => {
           const active = tab.id === activeTabId;
           const renaming = tab.id === renamingId;
@@ -165,6 +179,7 @@ export default function TabBar({
               }}
               onDoubleClick={() => startRename(tab)}
               title={tab.filePath ?? tab.fileName}
+              data-tab-id={tab.id}
               className={cls}
             >
               {renaming ? (
@@ -210,7 +225,20 @@ export default function TabBar({
             <line x1="5" y1="12" x2="19" y2="12" />
           </svg>
         </button>
+        </div>
       </div>
+      {contextMenu && (
+        <EditorContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={[{
+            label: t("tab.reopenClosed"),
+            disabled: !canReopenClosedTab,
+            onSelect: onReopenClosedTab,
+          }]}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
     </div>
   );
 }
