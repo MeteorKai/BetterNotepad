@@ -202,15 +202,18 @@ export function useFileExplorer() {
     [refreshDir]
   );
 
+  // Returns null on success, or the backend's error message. Deletion is a move
+  // to the Recycle Bin and can genuinely fail (e.g. a network share without
+  // one); the caller needs the reason to tell the user why nothing happened.
   const deleteNode = useCallback(
-    async (node: FileNode): Promise<boolean> => {
+    async (node: FileNode): Promise<string | null> => {
       try {
         await invoke("delete_file", { path: node.path });
         await refreshDir(parentDir(node.path));
-        return true;
+        return null;
       } catch (err) {
         console.error("Failed to delete:", node.path, err);
-        return false;
+        return String(err);
       }
     },
     [refreshDir]

@@ -289,14 +289,28 @@ pub fn rename_file(path: String, new_name: String) -> Result<String, String> {
     Ok(new_path.to_string_lossy().to_string())
 }
 
-#[tauri::command]
+/// Move a file or folder to the OS trash (the Recycle Bin on Windows) instead
+/// of removing it for good: a delete confirmed with one click in the file tree
+/// must stay reversible. `trash::delete` handles files and directories with a
+/// single call.
+///
+/// Off the main thread for the same reason as [`run_program`]: on Windows the
+/// move is an `IFileOperation` that can run long (and show a progress dialog)
+/// for a large folder across volumes, and the window must keep repainting
+/// meanwhile.
+///
+/// When the trash is unavailable — a network share without a recycle bin, say —
+/// this fails loudly rather than falling back to a permanent delete. The file
+/// stays on disk and the frontend keeps its tabs open; a silent fallback here
+/// would be exactly the data loss the trash exists to prevent.
+#[tauri::command(async)]
 pub fn delete_file(path: String) -> Result<(), String> {
-    let p = PathBuf::from(&path);
-    if p.is_dir() {
-        std::fs::remove_dir_all(&p).map_err(|e| format!("Failed to delete directory: {}", e))
-    } else {
-        std::fs::remove_file(&p).map_err(|e| format!("Failed to delete file: {}", e))
+    let target = PathBuf::from(&path);
+    if !target.exists() {
+        return Err(format!("Path does not exist: {}", path));
     }
+    trash::delete(&target)
+        .map_err(|e| format!("Failed to move to the Recycle Bin: {}", e))
 }
 
 #[tauri::command]
@@ -1240,5 +1254,37 @@ mod tests {
         assert!(sensitive.files.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The two happy-path tests perform a real move to the machine's trash, so
+    // they need a desktop session (IFileOperation on Windows). That is the
+    // environment this project's tests run in.
+    #[test]
+    fn delete_file_moves_a_file_to_the_trash() {
+        let dir = SearchFixture::new("trash-file");
+        let path = dir.0.join("a.txt");
+        fs::write(&path, "bye").unwrap();
+        delete_file(path.to_string_lossy().into_owned()).unwrap();
+        assert!(!path.exists(), "file must be gone from its folder");
+    }
+
+    #[test]
+    fn delete_file_moves_a_folder_tree_to_the_trash() {
+        let dir = SearchFixture::new("trash-dir");
+        let folder = dir.0.join("folder");
+        fs::create_dir(&folder).unwrap();
+        fs::write(folder.join("a.txt"), "bye").unwrap();
+        delete_file(folder.to_string_lossy().into_owned()).unwrap();
+        assert!(!folder.exists(), "folder and its contents must be gone");
+    }
+
+    #[test]
+    fn delete_file_reports_missing_paths() {
+        let missing = std::env::temp_dir().join(format!(
+            "betternotepad-trash-missing-{}.txt",
+            std::process::id()
+        ));
+        assert!(!missing.exists());
+        assert!(delete_file(missing.to_string_lossy().into_owned()).is_err());
     }
 }

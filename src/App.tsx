@@ -319,8 +319,15 @@ function App() {
         alert(t("explorer.deleteUnsaved", { name: unsaved.fileName }));
         return;
       }
-      const ok = await explorer.deleteNode(node);
-      if (ok) closeOpenFile(node.path, node.isDir);
+      // Deletion is a move to the Recycle Bin; when it fails the file is still
+      // on disk, so its tabs stay open and the reason is surfaced instead of a
+      // silent no-op in the tree.
+      const error = await explorer.deleteNode(node);
+      if (error) {
+        alert(t("explorer.deleteFailed", { reason: error }));
+        return;
+      }
+      closeOpenFile(node.path, node.isDir);
     },
     [explorer, closeOpenFile, activateTab]
   );

@@ -188,8 +188,9 @@ const en: Dict = {
   "explorer.revealActive": "Reveal Active File",
   "explorer.closeTitle": "Close explorer",
   "explorer.empty": "Empty folder",
-  "explorer.confirmDelete": "Delete “{name}”?",
+  "explorer.confirmDelete": "Move “{name}” to the Recycle Bin?",
   "explorer.deleteUnsaved": "Deletion cancelled: “{name}” has unsaved changes. Save, Save As to keep a copy, or close the tab and discard the changes before deleting again.",
+  "explorer.deleteFailed": "Delete failed: {reason} The file was not removed and stays where it is.",
   "explorer.namePlaceholder": "Name",
 
   "recent.title": "Recent Files",
@@ -519,8 +520,9 @@ const zh: Dict = {
   "explorer.revealActive": "定位当前文件",
   "explorer.closeTitle": "关闭资源管理器",
   "explorer.empty": "空文件夹",
-  "explorer.confirmDelete": "确定删除「{name}」？",
+  "explorer.confirmDelete": "将「{name}」移入回收站？",
   "explorer.deleteUnsaved": "已取消删除：「{name}」有未保存的更改。请先保存、另存为保留副本，或关闭标签并放弃更改，再重新删除。",
+  "explorer.deleteFailed": "删除失败：{reason} 文件未被移动，仍保留在原位置。",
   "explorer.namePlaceholder": "名称",
 
   "recent.title": "最近文件",

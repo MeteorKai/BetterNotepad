@@ -1,7 +1,7 @@
 {
   "name": "betternotepad",
   "private": true,
-  "version": "0.4.8",
+  "version": "0.4.10",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,6 +11,7 @@
     "test:file-operations": "node --test scripts/file-operations.test.mjs",
     "test:explorer-search": "node --test scripts/explorer-search.test.mjs",
     "test:updater": "node --test scripts/updater.test.mjs scripts/update-manifest.test.mjs",
+    "test:editor-indent": "node --test scripts/editor-indent.test.mjs",
     "release:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-update.ps1",
     "check:i18n": "node scripts/check-i18n.mjs",
     "audit:strings": "node scripts/audit-strings.mjs"

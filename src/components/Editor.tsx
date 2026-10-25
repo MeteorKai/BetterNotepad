@@ -17,8 +17,8 @@ import {
   type Command,
 } from "@codemirror/view";
 import { closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
-import { bracketMatching as bracketMatchingExtension } from "@codemirror/language";
-import { defaultKeymap, history, historyKeymap, redo, undo } from "@codemirror/commands";
+import { bracketMatching as bracketMatchingExtension, indentUnit } from "@codemirror/language";
+import { defaultKeymap, history, historyKeymap, indentLess, indentMore, redo, undo } from "@codemirror/commands";
 import EditorContextMenu from "./EditorContextMenu";
 import { getLanguageLoader } from "../editor/languages";
 import { cmHighlighting } from "../editor/theme";
@@ -265,13 +265,16 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
                     reportState(update.state);
                   }
                 }),
-                compartments.tabSize.of(EditorState.tabSize.of(tabWidth)),
+                compartments.tabSize.of([
+                  EditorState.tabSize.of(tabWidth),
+                  indentUnit.of(indentUnitRef.current),
+                ]),
                 lineNumbers(),
                 compartments.wrap.of(wrap ? [EditorView.lineWrapping] : []),
                 compartments.language.of([]),
                 keymap.of([
                   { key: "Enter", run: insertNewlineIndent },
-                  { key: "Tab", run: insertTab },
+                  { key: "Tab", run: insertTab, shift: indentLess },
                   { key: "Mod-/", run: toggleLineComment },
                   // Consumed so the default binding cannot insert a blank line;
                   // the app's global shortcut still runs the file.
@@ -334,7 +337,10 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
       view.dispatch({
         effects: [
           compartments.wrap.reconfigure(wrap ? [EditorView.lineWrapping] : []),
-          compartments.tabSize.reconfigure(EditorState.tabSize.of(tabWidth)),
+          compartments.tabSize.reconfigure([
+            EditorState.tabSize.of(tabWidth),
+            indentUnit.of(indentUnitRef.current),
+          ]),
           compartments.bracketMatching.reconfigure(
             bracketMatching
               ? [
@@ -348,7 +354,7 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
           ),
         ],
       });
-    }, [wrap, tabWidth, bracketMatching, compartments]);
+    }, [wrap, tabWidth, insertSpaces, bracketMatching, compartments]);
 
     useEffect(() => {
       const view = viewRef.current;
@@ -422,8 +428,9 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
     );
 
     const insertTab: Command = (view) => {
+      if (view.state.selection.ranges.some((range) => !range.empty)) return indentMore(view);
       const { from, to } = view.state.selection.main;
-      const unit = indentUnitRef.current;
+      const unit = view.state.facet(indentUnit);
       view.dispatch({
         changes: { from, to, insert: unit },
         selection: { anchor: from + unit.length },

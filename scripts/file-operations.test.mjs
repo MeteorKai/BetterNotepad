@@ -52,7 +52,7 @@ function harness(initialTabs, operations = {}) {
     isOpen: true, root: node("D:\\work", true), expanded: new Set(), folderPath: "D:\\work",
     async deleteNode(target) {
       calls.deletes.push(target.path);
-      return operations.deleteNode ? operations.deleteNode(target) : true;
+      return operations.deleteNode ? operations.deleteNode(target) : null;
     },
     async renameNode(target, name) {
       calls.renames.push([target.path, name]);
@@ -177,7 +177,7 @@ test("deleting a saved folder closes its descendant tabs only", async () => {
 });
 
 test("failed deletion leaves the tabs unchanged", async () => {
-  const h = harness([tab(`${folder}\\a.txt`)], { deleteNode: () => false });
+  const h = harness([tab(`${folder}\\a.txt`)], { deleteNode: () => "recycle bin unavailable" });
   const before = h.tabs.tabs;
   await h.explorer.onDelete(node(folder, true));
   h.render();
@@ -190,12 +190,22 @@ test("edits made while deletion is in flight remain recoverable", async () => {
   const deletion = h.explorer.onDelete(node(folder, true));
   h.tabs.setActiveContent("late edit");
   h.render();
-  finishDelete(true);
+  finishDelete(null);
   await deletion;
   h.render();
   assert.equal(h.tabs.activeTab.content, "late edit");
   assert.equal(h.tabs.activeTab.modified, true);
   assert.equal(h.tabs.activeTab.externalChange, "missing");
+});
+
+test("failed deletion alerts with the reason and keeps tabs open", async () => {
+  const h = harness([tab(`${folder}\\a.txt`)], { deleteNode: () => "Failed to move to the Recycle Bin: access denied" });
+  await h.explorer.onDelete(node(`${folder}\\a.txt`));
+  h.render();
+  assert.equal(h.calls.alerts.length, 1);
+  assert.match(h.calls.alerts[0], /删除失败/);
+  assert.match(h.calls.alerts[0], /Recycle Bin/);
+  assert.equal(h.tabs.tabs[0].filePath, `${folder}\\a.txt`);
 });
 
 test("folder rename updates all descendant paths and preserves tab state", async () => {
