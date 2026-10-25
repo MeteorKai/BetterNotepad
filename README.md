@@ -34,7 +34,7 @@ BetterNotepad 是一款面向 **Windows** 的文本与轻量代码编辑器。�
 
 ## 下载与安装
 
-前往 **[GitHub Releases](https://github.com/MeteorKai/BetterNotepad/releases)**，下载 `BetterNotepad_<版本号>_x64-setup.exe` 并运行安装。
+当前版本：**v0.5.1**（2026-10-25）。前往 **[GitHub Releases](https://github.com/MeteorKai/BetterNotepad/releases)**，下载 `BetterNotepad_0.5.1_x64-setup.exe` 并运行安装。
 
 - 当前提供 **Windows x64** 安装包。
 - 如果希望双击 `.txt` 时使用 BetterNotepad，请在 Windows 的“打开方式”中将它设为默认应用；安装程序不能替你保证默认关联。
