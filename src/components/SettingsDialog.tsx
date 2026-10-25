@@ -3,6 +3,9 @@ import { getVersion } from "@tauri-apps/api/app";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { AppUpdater } from "../hooks/useUpdater";
 import type { InterpreterConfig, ShellInfo } from "../hooks/useRunner";
+import type { useMascot } from "../hooks/useMascot";
+import { MASCOT_VARIANTS } from "../mascot/variants";
+import MascotPortrait from "./MascotPortrait";
 import { t, type LocaleSetting } from "../i18n";
 import {
   FONT_OPTIONS,
@@ -22,6 +25,7 @@ interface SettingsDialogProps {
   ) => void;
   onClose: () => void;
   updater: AppUpdater;
+  mascot: ReturnType<typeof useMascot>;
 }
 
 function Segmented<T extends string>({
@@ -269,6 +273,38 @@ function EditorSettingsPanel({
   );
 }
 
+function MascotSettingsPanel({ mascot }: { mascot: SettingsDialogProps["mascot"] }) {
+  return (
+    <div className="space-y-4">
+      <Row label={t("mascot.show")}>
+        <Toggle checked={mascot.visible} onChange={mascot.toggle} label={t("mascot.show")} />
+      </Row>
+      <p className="text-xs text-faint leading-relaxed">{t("mascot.chooseHint")}</p>
+      <div role="group" aria-label={t("mascot.choose")} className="grid grid-cols-2 gap-3">
+        {MASCOT_VARIANTS.map((variant) => (
+          <button
+            key={variant}
+            type="button"
+            aria-pressed={mascot.variant === variant}
+            onClick={() => mascot.setVariant(variant)}
+            className={`relative flex items-center gap-2 rounded-2xl border p-3 text-left transition-colors focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 ${
+              mascot.variant === variant ? "border-accent bg-accent-soft" : "border-line bg-surface hover:border-accent hover:bg-hover"
+            }`}
+          >
+            <MascotPortrait variant={variant} className="h-24 w-20 shrink-0" />
+            <span className="min-w-0 space-y-1">
+              <span className="block text-sm font-medium text-ink">{t(`mascot.${variant}.name`)}</span>
+              <span className="block text-[11px] leading-relaxed text-sub">{t(`mascot.${variant}.description`)}</span>
+            </span>
+            {mascot.variant === variant && <span className="absolute right-2 top-2 text-accent" aria-hidden="true">✓</span>}
+          </button>
+        ))}
+      </div>
+      {!mascot.visible && <p role="status" className="text-xs text-sub">{t("mascot.hiddenHint")}</p>}
+    </div>
+  );
+}
+
 function AboutPanel({
   locale,
   onSetLocale,
@@ -353,9 +389,10 @@ export default function SettingsDialog({
   onSetEditor,
   onClose,
   updater,
+  mascot,
 }: SettingsDialogProps) {
   const closeRef = useRef<HTMLButtonElement>(null);
-  const [tab, setTab] = useState<"editor" | "interpreters" | "about">("editor");
+  const [tab, setTab] = useState<"editor" | "interpreters" | "mascot" | "about">("editor");
 
   const browse = async (language: string) => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -377,6 +414,9 @@ export default function SettingsDialog({
 
   useEffect(() => {
     closeRef.current?.focus();
+  }, []);
+
+  useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -394,7 +434,7 @@ export default function SettingsDialog({
       onMouseDown={onClose}
     >
       <div
-        className="relative overflow-hidden bg-elevated border border-line rounded-2xl shadow-2xl w-[560px] max-h-[80vh] flex flex-col"
+        className="relative overflow-hidden bg-elevated border border-line rounded-2xl shadow-2xl w-[560px] max-w-[95vw] max-h-[80vh] flex flex-col"
         onMouseDown={(e) => e.stopPropagation()}
       >
         <div className="pointer-events-none absolute inset-0 pattern-dots" />
@@ -421,6 +461,16 @@ export default function SettingsDialog({
               }
             >
               {t("settings.tab.interpreters")}
+            </button>
+            <button
+              onClick={() => setTab("mascot")}
+              className={
+                tab === "mascot"
+                  ? "px-3 py-1 text-sm font-medium accent-chip"
+                  : "px-3 py-1 text-sm text-sub hover:text-ink hover:bg-hover transition-colors"
+              }
+            >
+              {t("toolbar.mascot")}
             </button>
             <button
               onClick={() => setTab("about")}
@@ -453,6 +503,8 @@ export default function SettingsDialog({
               onSet={(patch) => onSetEditor(patch)}
               shells={shells}
             />
+          ) : tab === "mascot" ? (
+            <MascotSettingsPanel mascot={mascot} />
           ) : tab === "about" ? (
             <AboutPanel
               locale={editorSettings.locale}

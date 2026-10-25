@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { isMascotVariant, type MascotVariant } from "../mascot/variants";
 
 export interface MascotPos {
   x: number;
@@ -11,6 +12,7 @@ export const MASCOT_H = 190;
 
 const VIS_KEY = "betternotepad.mascot.visible";
 const POS_KEY = "betternotepad.mascot.pos";
+const VARIANT_KEY = "betternotepad.mascot.variant";
 
 /** Smallest gap we allow between the mascot and a window edge. */
 const EDGE = 4;
@@ -22,6 +24,16 @@ function loadVisible(): boolean {
   } catch {
     return true;
   }
+}
+
+function loadVariant(): MascotVariant {
+  try {
+    const value = localStorage.getItem(VARIANT_KEY);
+    if (isMascotVariant(value)) return value;
+  } catch {
+    /* ignore storage restrictions */
+  }
+  return "cat";
 }
 
 function clamp(v: number, min: number, max: number): number {
@@ -92,6 +104,15 @@ function savePos(p: MascotPos): void {
 
 export function useMascot() {
   const [visible, setVisible] = useState(loadVisible);
+  const [variant, setVariant] = useState<MascotVariant>(loadVariant);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(VARIANT_KEY, variant);
+    } catch {
+      /* ignore storage restrictions */
+    }
+  }, [variant]);
 
   useEffect(() => {
     try {
@@ -103,5 +124,5 @@ export function useMascot() {
 
   const toggle = useCallback(() => setVisible((v) => !v), []);
 
-  return { visible, toggle, loadPos, savePos };
+  return { visible, toggle, variant, setVariant, loadPos, savePos };
 }

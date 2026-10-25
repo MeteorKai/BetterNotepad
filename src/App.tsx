@@ -1067,6 +1067,7 @@ function App() {
       )}
       {mascot.visible && (
         <Mascot
+          variant={mascot.variant}
           typingTick={typingTickRef.current}
           initialPos={mascot.loadPos()}
           onSavePos={mascot.savePos}
@@ -1100,6 +1101,7 @@ function App() {
           onSetEditor={setEditorSettings}
           onClose={() => setSettingsOpen(false)}
           updater={updater}
+          mascot={mascot}
         />
       )}
       {aboutOpen && <AboutDialog onClose={() => setAboutOpen(false)} />}

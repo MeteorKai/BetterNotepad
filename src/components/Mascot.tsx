@@ -2,8 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { MASCOT_H, MASCOT_W, type MascotPos } from "../hooks/useMascot";
 import { t } from "../i18n";
+import { MASCOT_PALETTES, type MascotVariant } from "../mascot/variants";
+import MascotPortrait from "./MascotPortrait";
 
 interface MascotProps {
+  variant: MascotVariant;
   typingTick: number;
   initialPos: MascotPos | null;
   onSavePos: (p: MascotPos) => void;
@@ -46,127 +49,189 @@ function clamp(v: number, min: number, max: number): number {
 }
 
 function createGradientMap(): THREE.Texture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 2;
-  canvas.height = 256;
-  const ctx = canvas.getContext("2d")!;
-  const grad = ctx.createLinearGradient(0, 0, 0, 256);
-  grad.addColorStop(0, "#ffffff");
-  grad.addColorStop(0.55, "#c9c2d8");
-  grad.addColorStop(1, "#8f88a0");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 2, 256);
-  const tex = new THREE.CanvasTexture(canvas);
+  // Toon lighting samples along X, not Y. A vertical ramp produces flat grey.
+  const shades = Uint8Array.from({ length: 32 }, (_, i) => Math.round(96 + 159 * Math.sqrt(i / 31)));
+  const tex = new THREE.DataTexture(shades, shades.length, 1, THREE.RedFormat);
   tex.minFilter = THREE.NearestFilter;
   tex.magFilter = THREE.NearestFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function createShadowMap(): THREE.Texture {
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 64;
+  const ctx = canvas.getContext("2d")!;
+  const grad = ctx.createRadialGradient(32, 32, 2, 32, 32, 32);
+  grad.addColorStop(0, "rgba(68, 48, 78, 0.28)");
+  grad.addColorStop(0.5, "rgba(68, 48, 78, 0.12)");
+  grad.addColorStop(1, "rgba(68, 48, 78, 0)");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 64, 64);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
 }
 
 interface FaceRefs {
   face: THREE.Group;
-  eyeL: THREE.Mesh;
-  eyeR: THREE.Mesh;
+  eyeL: THREE.Group;
+  eyeR: THREE.Group;
   mouth: THREE.Mesh;
   armL: THREE.Group;
+  tail: THREE.Group;
 }
 
-function buildCharacter(grad: THREE.Texture): {
+function buildCharacter(grad: THREE.Texture, shadowMap: THREE.Texture, variant: MascotVariant): {
   root: THREE.Group;
   body: THREE.Group;
+  shadow: THREE.Mesh;
   refs: FaceRefs;
 } {
-  const toon = (c: number) => new THREE.MeshToonMaterial({ color: c, gradientMap: grad });
-  const bodyMat = toon(0xfff0df);
-  const darkMat = toon(0x342c48);
-  const pinkMat = toon(0xffb7c5);
-  const accentMat = toon(0xb7a8f5);
-  const whiteMat = toon(0xffffff);
-  const bellyMat = toon(0xfff8ef);
+  const colors = MASCOT_PALETTES[variant];
+  const toon = (c: string) => new THREE.MeshToonMaterial({ color: c, gradientMap: grad });
+  const bodyMat = toon(colors.body);
+  const pinkMat = toon(colors.pink);
+  const accentMat = toon(colors.accent);
+  const bellyMat = toon(colors.belly);
+  const darkMat = new THREE.MeshBasicMaterial({ color: 0x493b50 });
+  const whiteMat = new THREE.MeshBasicMaterial({ color: 0xfffdf8 });
+  const sphere = new THREE.SphereGeometry(1, 32, 24);
+  const ellipsoid = (parent: THREE.Group, material: THREE.Material, position: number[], scale: number[]) => {
+    const mesh = new THREE.Mesh(sphere, material);
+    mesh.position.set(position[0], position[1], position[2]);
+    mesh.scale.set(scale[0], scale[1], scale[2]);
+    parent.add(mesh);
+    return mesh;
+  };
 
   const root = new THREE.Group();
   const body = new THREE.Group();
   root.add(body);
 
-  // Rounded torso
-  const torso = new THREE.Mesh(new THREE.SphereGeometry(0.9, 48, 48), bodyMat);
-  torso.scale.set(1, 0.95, 1);
-  torso.position.y = 0.85;
-  body.add(torso);
+  // A small seated body and oversized head keep the silhouette readable at 150px.
+  ellipsoid(body, bodyMat, [0, 0.64, 0], [0.58, 0.64, 0.46]);
+  ellipsoid(body, bellyMat, [0, 0.59, 0.41], [0.35, 0.36, 0.07]);
+  for (const side of [-1, 1]) {
+    ellipsoid(body, bodyMat, [side * 0.3, 0.12, 0.23], [0.24, 0.13, 0.28]);
+  }
+  const head = new THREE.Group();
+  head.position.y = 1.57;
+  body.add(head);
+  ellipsoid(head, bodyMat, [0, 0, 0], [0.86, 0.72, 0.61]);
 
-  // Belly patch
-  const belly = new THREE.Mesh(new THREE.SphereGeometry(0.5, 32, 32), bellyMat);
-  belly.position.set(0, 0.58, 0.68);
-  belly.scale.set(1, 0.75, 0.5);
-  body.add(belly);
+  if (variant === "bear" || variant === "rabbit") {
+    for (const side of [-1, 1]) {
+      const ear = new THREE.Group();
+      const rabbit = variant === "rabbit";
+      ear.position.set(side * (rabbit ? 0.38 : 0.57), rabbit ? 0.65 : 0.51, 0);
+      ear.rotation.z = side * (rabbit ? -0.15 : -0.1);
+      ellipsoid(ear, bodyMat, [0, 0, 0], rabbit ? [0.16, 0.52, 0.16] : [0.27, 0.27, 0.18]);
+      ellipsoid(ear, pinkMat, [0, 0, 0.16], rabbit ? [0.08, 0.36, 0.035] : [0.15, 0.15, 0.035]);
+      head.add(ear);
+    }
+  } else {
+    const earShape = new THREE.Shape();
+    earShape.moveTo(-0.25, -0.1);
+    earShape.quadraticCurveTo(-0.27, 0.12, -0.12, 0.55);
+    earShape.quadraticCurveTo(0, 0.72, 0.12, 0.55);
+    earShape.quadraticCurveTo(0.27, 0.12, 0.25, -0.1);
+    earShape.closePath();
+    const earGeo = new THREE.ExtrudeGeometry(earShape, {
+      depth: 0.1, bevelEnabled: true, bevelThickness: 0.06,
+      bevelSize: 0.06, bevelSegments: 3, steps: 1, curveSegments: 12,
+    });
+    for (const side of [-1, 1]) {
+      const ear = new THREE.Group();
+      ear.position.set(side * 0.53, 0.43, -0.06);
+      ear.rotation.z = side * -0.24;
+      ear.add(new THREE.Mesh(earGeo, bodyMat));
+      const inner = new THREE.Mesh(earGeo, pinkMat);
+      inner.scale.set(0.56, 0.65, 0.4);
+      inner.position.set(0, 0.04, 0.14);
+      ear.add(inner);
+      head.add(ear);
+    }
+  }
 
-  // Antenna
-  const stick = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 0.28, 12), accentMat);
-  stick.position.set(0, 1.78, 0);
-  body.add(stick);
-  const tip = new THREE.Mesh(new THREE.SphereGeometry(0.09, 20, 20), accentMat);
-  tip.position.set(0, 1.96, 0);
-  body.add(tip);
+  if (variant === "bear") {
+    ellipsoid(head, bellyMat, [0, -0.17, 0.56], [0.28, 0.17, 0.065]);
+  } else if (variant === "fox") {
+    for (const side of [-1, 1]) {
+      ellipsoid(head, bellyMat, [side * 0.21, -0.18, 0.52], [0.3, 0.23, 0.1]);
+    }
+  }
 
-  // Face group (eyes/cheeks/mouth) so it can track the pointer subtly
+  // Eye highlights live inside the eye groups, so they close with each blink.
   const face = new THREE.Group();
-  face.position.set(0, 1.02, 0);
-  body.add(face);
-
-  const eyeGeo = new THREE.SphereGeometry(0.15, 24, 24);
-  const eyeL = new THREE.Mesh(eyeGeo, darkMat);
-  eyeL.position.set(-0.3, 0, 0.78);
-  const eyeR = new THREE.Mesh(eyeGeo, darkMat);
-  eyeR.position.set(0.3, 0, 0.78);
-  face.add(eyeL, eyeR);
-
-  const hlGeo = new THREE.SphereGeometry(0.05, 12, 12);
-  const hlL = new THREE.Mesh(hlGeo, whiteMat);
-  hlL.position.set(-0.34, 0.06, 0.93);
-  const hlR = new THREE.Mesh(hlGeo, whiteMat);
-  hlR.position.set(0.26, 0.06, 0.93);
-  face.add(hlL, hlR);
-
-  const cheekGeo = new THREE.SphereGeometry(0.1, 16, 16);
-  const cheekL = new THREE.Mesh(cheekGeo, pinkMat);
-  cheekL.position.set(-0.64, -0.26, 0.64);
-  cheekL.scale.set(1, 0.7, 0.4);
-  const cheekR = new THREE.Mesh(cheekGeo, pinkMat);
-  cheekR.position.set(0.64, -0.26, 0.64);
-  cheekR.scale.set(1, 0.7, 0.4);
-  face.add(cheekL, cheekR);
-
-  const mouth = new THREE.Mesh(new THREE.SphereGeometry(0.06, 16, 16), darkMat);
-  mouth.position.set(0, -0.3, 0.92);
-  mouth.scale.set(1.5, 0.75, 0.5);
+  head.add(face);
+  const makeEye = (x: number) => {
+    const eye = new THREE.Group();
+    eye.position.set(x, 0.015, 0.58);
+    ellipsoid(eye, darkMat, [0, 0, 0], [0.085, 0.115, 0.055]);
+    ellipsoid(eye, whiteMat, [-0.025, 0.035, 0.05], [0.025, 0.03, 0.015]);
+    ellipsoid(eye, whiteMat, [0.025, -0.04, 0.05], [0.011, 0.013, 0.01]);
+    face.add(eye);
+    return eye;
+  };
+  const eyeL = makeEye(-0.27);
+  const eyeR = makeEye(0.27);
+  for (const side of [-1, 1]) {
+    ellipsoid(face, pinkMat, [side * 0.48, -0.16, 0.53], [0.14, 0.055, 0.025]);
+  }
+  ellipsoid(face, pinkMat, [0, -0.105, 0.63], [0.04, 0.027, 0.03]);
+  const smile = new THREE.CatmullRomCurve3([
+    new THREE.Vector3(-0.105, -0.02, 0), new THREE.Vector3(-0.06, -0.05, 0),
+    new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.06, -0.05, 0),
+    new THREE.Vector3(0.105, -0.02, 0),
+  ]);
+  const mouth = new THREE.Mesh(new THREE.TubeGeometry(smile, 16, 0.012, 6, false), darkMat);
+  mouth.position.set(0, -0.18, 0.64);
   face.add(mouth);
 
-  // Arms (pivot groups so a hand can wave)
-  const armGeo = new THREE.SphereGeometry(0.16, 20, 20);
+  const scarf = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.085, 10, 40), accentMat);
+  scarf.rotation.x = Math.PI / 2;
+  scarf.scale.set(1.25, 1, 1);
+  scarf.position.y = 1.04;
+  body.add(scarf);
+  const scarfEnd = ellipsoid(body, accentMat, [0.22, 0.79, 0.49], [0.11, 0.26, 0.06]);
+  scarfEnd.rotation.z = 0.2;
+  ellipsoid(body, accentMat, [0.18, 1.01, 0.49], [0.14, 0.11, 0.08]);
+
   const armL = new THREE.Group();
-  armL.position.set(-0.9, 0.8, 0);
-  const handL = new THREE.Mesh(armGeo, bodyMat);
-  handL.position.set(-0.22, -0.05, 0);
-  armL.add(handL);
-  const armR = new THREE.Group();
-  armR.position.set(0.9, 0.8, 0);
-  const handR = new THREE.Mesh(armGeo, bodyMat);
-  handR.position.set(0.22, -0.05, 0);
-  armR.add(handR);
-  body.add(armL, armR);
+  armL.position.set(-0.52, 0.82, 0.06);
+  const handL = ellipsoid(armL, bodyMat, [-0.12, -0.13, 0.12], [0.17, 0.27, 0.18]);
+  handL.rotation.z = -0.3;
+  body.add(armL);
+  const handR = ellipsoid(body, bodyMat, [0.64, 0.69, 0.18], [0.17, 0.27, 0.18]);
+  handR.rotation.z = 0.3;
 
-  // Soft ground shadow
+  const tail = new THREE.Group();
+  tail.position.set(0.43, 0.37, -0.2);
+  if (variant === "rabbit" || variant === "bear") {
+    ellipsoid(tail, variant === "rabbit" ? bellyMat : bodyMat, [0.15, 0.08, 0], [0.23, 0.23, 0.23]);
+  } else {
+    const tailCurve = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.46, 0.12, -0.1),
+      new THREE.Vector3(0.61, 0.48, -0.1), new THREE.Vector3(0.45, 0.62, -0.1),
+    ]);
+    const radius = variant === "fox" ? 0.18 : 0.1;
+    tail.add(new THREE.Mesh(new THREE.TubeGeometry(tailCurve, 24, radius, 8, false), bodyMat));
+    ellipsoid(tail, variant === "fox" ? bellyMat : bodyMat, [0.45, 0.62, -0.1], [radius, radius, radius]);
+  }
+  body.add(tail);
+
+  // A feathered, camera-facing shadow stays on the ground when the cat hops.
   const shadow = new THREE.Mesh(
-    new THREE.CircleGeometry(0.85, 32),
-    new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.16 })
+    new THREE.PlaneGeometry(1.9, 0.38),
+    new THREE.MeshBasicMaterial({ map: shadowMap, transparent: true, depthWrite: false })
   );
-  shadow.rotation.x = -Math.PI / 2;
-  shadow.position.y = 0.01;
-  root.add(shadow);
+  shadow.position.set(0, 0.035, -0.4);
 
-  return { root, body, refs: { face, eyeL, eyeR, mouth, armL } };
+  return { root, body, shadow, refs: { face, eyeL, eyeR, mouth, armL, tail } };
 }
 
-export default function Mascot({ typingTick, initialPos, onSavePos, onHide }: MascotProps) {
+export default function Mascot({ variant, typingTick, initialPos, onSavePos, onHide }: MascotProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<MascotPos>(() => {
     if (initialPos) return initialPos;
@@ -208,7 +273,7 @@ export default function Mascot({ typingTick, initialPos, onSavePos, onHide }: Ma
 
   const lastTypingBubbleRef = useRef(0);
   const dragRef = useRef({ active: false, moved: false, sx: 0, sy: 0, ox: 0, oy: 0 });
-  const mouseRef = useRef({ x: 0, y: 0 });
+  const mouseRef = useRef({ x: MASCOT_W / 2, y: MASCOT_H / 2 });
   const jumpSignalRef = useRef(0);
   const lastJumpSignalRef = useRef(0);
 
@@ -236,6 +301,7 @@ export default function Mascot({ typingTick, initialPos, onSavePos, onHide }: Ma
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    setWebglFailed(false);
 
     let renderer: THREE.WebGLRenderer;
     try {
@@ -254,21 +320,22 @@ export default function Mascot({ typingTick, initialPos, onSavePos, onHide }: Ma
 
     const scene = new THREE.Scene();
     const aspect = MASCOT_W / MASCOT_H;
-    const camera = new THREE.PerspectiveCamera(38, aspect, 0.1, 100);
-    camera.position.set(0, 1.45, 5.4);
-    camera.lookAt(0, 1.12, 0);
+    const camera = new THREE.OrthographicCamera(-1.8 * aspect, 1.8 * aspect, 1.8, -1.8, 0.1, 20);
+    camera.position.set(0, 1.65, 6);
+    camera.lookAt(0, 1.4, 0);
 
-    scene.add(new THREE.HemisphereLight(0xffffff, 0xd8ccf0, 0.95));
-    const key = new THREE.DirectionalLight(0xffffff, 1.2);
-    key.position.set(2, 3, 4);
+    scene.add(new THREE.HemisphereLight(0xfffaf2, 0xcfc3de, 1.1));
+    const key = new THREE.DirectionalLight(0xfff5e9, 1.1);
+    key.position.set(-3, 4, 5);
     scene.add(key);
     const rim = new THREE.DirectionalLight(0xe6e0ff, 0.5);
     rim.position.set(-2, 1.5, -3);
     scene.add(rim);
 
     const grad = createGradientMap();
-    const { root, body, refs } = buildCharacter(grad);
-    scene.add(root);
+    const shadowMap = createShadowMap();
+    const { root, body, shadow, refs } = buildCharacter(grad, shadowMap, variant);
+    scene.add(shadow, root);
 
     // Keep the canvas transparent (clear with alpha 0) and sized to match the
     // container, so no white/black box shows around the mascot.
@@ -282,15 +349,20 @@ export default function Mascot({ typingTick, initialPos, onSavePos, onHide }: Ma
     let prev = performance.now();
     const anim = {
       nextBlink: performance.now() + 2000 + Math.random() * 3000,
-      blinkStart: 0,
-      nextWave: performance.now() + 3000 + Math.random() * 6000,
-      waveStart: 0,
+      blinkStart: -Infinity,
+      nextWave: performance.now() + 5000 + Math.random() * 6000,
+      waveStart: -Infinity,
       jumpT: 1, // 1 = idle
     };
 
     const render = (now: number) => {
       raf = 0;
       if (document.hidden) return;
+      // The small idle companion does not need to render at the monitor's Hz.
+      if (now - prev < 1000 / 30) {
+        raf = requestAnimationFrame(render);
+        return;
+      }
       const dt = Math.min((now - prev) / 1000, 0.05);
       prev = now;
       const t = now / 1000;
@@ -302,15 +374,16 @@ export default function Mascot({ typingTick, initialPos, onSavePos, onHide }: Ma
       }
 
       // Float
-      root.position.y = Math.sin(t * 1.7) * 0.05;
+      root.position.y = Math.sin(t * 1.7) * 0.025;
 
       // Breathe
-      body.scale.y = 1 + Math.sin(t * 2.4) * 0.022;
-      body.scale.x = 1 - Math.sin(t * 2.4) * 0.011;
-      body.scale.z = 1 - Math.sin(t * 2.4) * 0.011;
+      body.scale.y = 1 + Math.sin(t * 2) * 0.012;
+      body.scale.x = body.scale.z = 1 - Math.sin(t * 2) * 0.006;
 
       // Look around
-      body.rotation.y = Math.sin(t * 0.4) * 0.3;
+      body.rotation.y = Math.sin(t * 0.4) * 0.09;
+      body.rotation.z = Math.sin(t * 0.7) * 0.018;
+      refs.tail.rotation.y = Math.sin(t * 1.2) * 0.14;
 
       // Blink
       if (now >= anim.nextBlink) {
@@ -320,8 +393,7 @@ export default function Mascot({ typingTick, initialPos, onSavePos, onHide }: Ma
       const bk = (now - anim.blinkStart) / 1000;
       let eyeY = 1;
       if (bk < 0.18) {
-        const half = bk < 0.09 ? bk / 0.09 : (0.18 - bk) / 0.09;
-        eyeY = 0.12 + 0.88 * clamp(half, 0, 1);
+        eyeY = 1 - Math.sin(Math.PI * bk / 0.18) * 0.94;
       }
       if (anim.jumpT < 1) eyeY = Math.min(eyeY, 0.9);
       refs.eyeL.scale.y = eyeY;
@@ -344,17 +416,18 @@ export default function Mascot({ typingTick, initialPos, onSavePos, onHide }: Ma
         anim.jumpT += dt / 0.7;
         if (anim.jumpT >= 1) anim.jumpT = 1;
         const j = Math.sin(Math.PI * anim.jumpT);
-        root.position.y += j * 0.5;
-        refs.mouth.scale.y = 0.75 + j * 1.1;
+        root.position.y += j * 0.24;
+        refs.mouth.scale.y = 1 + j * 0.5;
       } else {
-        refs.mouth.scale.y = 0.75 + Math.sin(t * 2.4) * 0.05;
+        refs.mouth.scale.y = 1;
       }
+      shadow.scale.setScalar(1 - Math.max(0, root.position.y) * 0.35);
 
       // Face follows pointer
-      const mx = mouseRef.current.x / MASCOT_W - 0.5;
-      const my = mouseRef.current.y / MASCOT_H - 0.5;
-      refs.face.position.x = mx * 0.1;
-      refs.face.position.y = 1.02 - my * 0.06;
+      const mx = clamp(mouseRef.current.x / MASCOT_W - 0.5, -0.5, 0.5);
+      const my = clamp(mouseRef.current.y / MASCOT_H - 0.5, -0.5, 0.5);
+      refs.face.position.x = THREE.MathUtils.damp(refs.face.position.x, mx * 0.08, 8, dt);
+      refs.face.position.y = THREE.MathUtils.damp(refs.face.position.y, -my * 0.05, 8, dt);
 
       renderer.render(scene, camera);
       raf = requestAnimationFrame(render);
@@ -376,19 +449,25 @@ export default function Mascot({ typingTick, initialPos, onSavePos, onHide }: Ma
       document.removeEventListener("visibilitychange", onVisibilityChange);
       cancelAnimationFrame(raf);
       grad.dispose();
+      shadowMap.dispose();
+      const geometries = new Set<THREE.BufferGeometry>();
+      const materials = new Set<THREE.Material>();
       scene.traverse((o) => {
         const m = o as THREE.Mesh;
-        if (m.geometry) m.geometry.dispose();
+        if (m.geometry) geometries.add(m.geometry);
         const mat = m.material as THREE.Material | THREE.Material[] | undefined;
-        if (Array.isArray(mat)) mat.forEach((x) => x.dispose());
-        else mat?.dispose();
+        if (Array.isArray(mat)) mat.forEach((x) => materials.add(x));
+        else if (mat) materials.add(mat);
       });
+      geometries.forEach((geometry) => geometry.dispose());
+      materials.forEach((material) => material.dispose());
       renderer.dispose();
+      renderer.forceContextLoss();
       if (renderer.domElement.parentElement === container) {
         container.removeChild(renderer.domElement);
       }
     };
-  }, []);
+  }, [variant]);
 
   // Clear bubble timer on unmount
   useEffect(() => {
@@ -439,39 +518,44 @@ export default function Mascot({ typingTick, initialPos, onSavePos, onHide }: Ma
     [triggerJump, onSavePos]
   );
 
-  if (webglFailed) {
-    return (
-      <div className="fixed z-[35] select-none" style={{ left: pos.x, top: pos.y, width: MASCOT_W, height: MASCOT_H }}>
-        <div className="text-4xl flex items-center justify-center h-full">🐾</div>
-      </div>
-    );
-  }
-
   return (
     <div
       ref={containerRef}
-      className="fixed z-[35] select-none cursor-grab active:cursor-grabbing"
+      className="group fixed z-[35] select-none cursor-grab active:cursor-grabbing"
       style={{ left: pos.x, top: pos.y, width: MASCOT_W, height: MASCOT_H, touchAction: "none" }}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
+      onPointerLeave={() => (mouseRef.current = { x: MASCOT_W / 2, y: MASCOT_H / 2 })}
       onPointerUp={handlePointerUp}
       onPointerCancel={() => (dragRef.current.active = false)}
     >
+      {webglFailed && (
+        <MascotPortrait variant={variant} className="absolute inset-0 h-full w-full pointer-events-none" />
+      )}
+      <button
+        type="button"
+        aria-label={t("toolbar.mascot")}
+        className="absolute inset-0 rounded-2xl cursor-inherit focus-visible:outline-2 focus-visible:outline-accent focus-visible:-outline-offset-2"
+        onClick={(e) => { if (e.detail === 0) triggerJump(); }}
+      />
       {bubble && (
-        <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 whitespace-nowrap">
-          <div className="relative bg-elevated border border-line rounded-xl px-3 py-1.5 text-sm text-ink shadow-card">
+        <div className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-1 w-max max-w-[min(210px,90vw)]">
+          <div role="status" className="relative bg-elevated border border-line rounded-2xl px-3 py-2 text-center text-xs leading-relaxed text-ink shadow-card">
             {bubble}
             <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-2 h-2 bg-elevated border-r border-b border-line rotate-45" />
           </div>
         </div>
       )}
-      <div
+      <button
+        type="button"
+        aria-label={t("toolbar.mascotHideTitle")}
+        onPointerDown={(e) => e.stopPropagation()}
         onClick={onHide}
         title={t("toolbar.mascotHideTitle")}
-        className="absolute top-1 right-1 w-5 h-5 rounded-md flex items-center justify-center text-faint hover:text-ink hover:bg-hover transition-colors text-xs"
+        className="absolute top-1 right-1 w-6 h-6 rounded-full flex items-center justify-center border border-line bg-elevated text-sub shadow-card opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:text-ink hover:bg-hover transition-opacity text-sm"
       >
         ×
-      </div>
+      </button>
     </div>
   );
 }

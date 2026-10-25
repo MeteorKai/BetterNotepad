@@ -242,6 +242,8 @@ function renderAboutPanel(updater) {
     if (id === "react/jsx-runtime") return require(id);
     if (id === "../i18n") return i18nModule.exports;
     if (id === "../hooks/useEditorSettings") return { FONT_OPTIONS: [] };
+    if (id === "../mascot/variants") return { MASCOT_VARIANTS: [] };
+    if (id === "./MascotPortrait") return { __esModule: true, default: () => null };
     if (id.startsWith("@tauri-apps/")) return {};
     throw new Error(`Unexpected settings import: ${id}`);
   };
