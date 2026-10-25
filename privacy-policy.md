@@ -69,29 +69,61 @@ BetterNotepad 不会将文档内容上传至外部服务器。
 
 **English**
 
-BetterNotepad does not sell, rent, or share users' personal information with third parties.
+BetterNotepad uses GitHub as a third-party service for software update distribution. When users manually check for updates, their devices communicate directly with GitHub.
 
-Since the application does not collect personal information, no such information is provided to advertisers, analytics providers, or other third parties.
+For information about GitHub's data practices, please refer to the [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 
 **中文**
 
-BetterNotepad 不会出售、出租或向第三方共享用户的个人信息。
+BetterNotepad 使用 GitHub 作为第三方软件更新分发服务。当用户手动检查更新时，其设备将直接与 GitHub 服务器通信。
 
-由于应用程序不收集个人信息，因此不会向广告商、数据分析服务商或其他第三方提供此类信息。
+有关 GitHub 如何处理相关数据的信息，请参阅 [GitHub 隐私声明](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)。
 
-## 5. Internet Connectivity / 网络连接
+## 5. Internet Connectivity and Software Updates / 网络连接与软件更新
 
 **English**
 
-BetterNotepad's core text editing functionality works locally and does not require an internet connection.
+BetterNotepad's core text editing features operate locally and do not require an internet connection.
 
-The application does not transmit user documents or personal information over the internet.
+BetterNotepad includes an optional, user-initiated software update feature.
+
+When users click "Check for Updates," the application connects to GitHub to retrieve information about the latest available version.
+
+If a newer version is available, BetterNotepad asks the user whether they wish to proceed with the update.
+
+Only after the user confirms will BetterNotepad automatically download and install the update from GitHub.
+
+BetterNotepad does not automatically check for, download, or install updates without user initiation and confirmation.
+
+During update-related network requests, GitHub may receive technical information, such as the user's IP address and request metadata, in accordance with GitHub's Privacy Statement.
+
+BetterNotepad does not transmit the contents of users' documents as part of the update process.
+
+Users may choose not to use the update feature and can continue using BetterNotepad's core text editing functionality offline.
+
+For more information, please refer to the [GitHub Privacy Statement](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement).
 
 **中文**
 
 BetterNotepad 的核心文本编辑功能在本地运行，无需互联网连接。
 
-应用程序不会通过互联网传输用户文档或个人信息。
+BetterNotepad 提供可选的软件更新功能，所有更新操作均由用户主动发起。
+
+当用户点击“检查更新”时，应用程序会连接 GitHub，获取最新版本信息。
+
+如果检测到新版本，BetterNotepad 会询问用户是否进行更新。
+
+**只有在用户明确确认后，BetterNotepad 才会自动从 GitHub 下载并安装新版本。**
+
+未经用户主动发起及确认，BetterNotepad 不会自动检查、下载或安装软件更新。
+
+在更新过程中，GitHub 可能根据其隐私声明接收与网络请求相关的技术信息，例如用户的 IP 地址及请求元数据。
+
+BetterNotepad 不会在更新过程中上传用户编辑的文档内容。
+
+用户可以选择不使用软件更新功能，并继续离线使用 BetterNotepad 的核心文本编辑功能。
+
+有关 GitHub 数据处理方式的更多信息，请参阅 [GitHub 隐私声明](https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement)。
 
 ## 6. Data Security / 数据安全
 
