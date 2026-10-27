@@ -747,6 +747,20 @@ export function useRunner() {
           });
           return false;
         }
+        // The pane is laid out *while* `pty_open` is still running — the UTF-8
+        // prime alone takes seconds on this machine — so the fit that arrived in
+        // that window was rejected by the backend, which had not registered the
+        // session yet. Apply the size that is current now; otherwise the shell
+        // keeps the 80x24 it was opened with, and a command line longer than
+        // that makes PSReadLine wrap and redraw it at the wrong width.
+        {
+          const size = shellSizeRef.current;
+          try {
+            await invoke("pty_resize", { id, cols: size.cols, rows: size.rows });
+          } catch {
+            /* session went away */
+          }
+        }
         // The session exists from here on, so this is the first moment a queued
         // command line can actually be delivered. The shell's own output beats
         // this to it in practice (see `channel.onmessage`); this is the way out
@@ -878,6 +892,16 @@ export function useRunner() {
         };
         try {
           await invoke("pty_open", { id, command, args, cwd: dir, cols, rows, onData: channel });
+          // Same race as the shell: a fit can land between reading `sizeRef` and
+          // the backend registering the session, in which case that resize was
+          // rejected. Re-apply the current size so the child formats for the
+          // pane it is actually shown in.
+          const size = sizeRef.current;
+          try {
+            await invoke("pty_resize", { id, cols: size.cols, rows: size.rows });
+          } catch {
+            /* session went away */
+          }
           return true;
         } catch (err) {
           console.error("Failed to open terminal:", err);

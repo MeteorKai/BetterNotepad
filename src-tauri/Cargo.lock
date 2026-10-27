@@ -2317,7 +2317,7 @@ dependencies = [
 
 [[package]]
 name = "notepad-app"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "chrono",
  "encoding_rs",

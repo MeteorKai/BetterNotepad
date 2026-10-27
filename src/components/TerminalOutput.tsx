@@ -1,7 +1,6 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
-import { WebglAddon } from "@xterm/addon-webgl";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import "@xterm/xterm/css/xterm.css";
@@ -165,14 +164,13 @@ export default function TerminalOutput({
     // registered — it lives on the addon manager, which `open()` creates.
     term.open(host);
 
-    // WebGL is much faster for the burst of output a build script produces, but
-    // it depends on a working GPU driver — fall back to the canvas renderer
-    // rather than showing a blank panel.
-    try {
-      term.loadAddon(new WebglAddon());
-    } catch {
-      /* canvas renderer stays active */
-    }
+    // Deliberately no WebGL renderer. In WebView2 the WebGL addon can leave
+    // rows painted at their previous offset after the pane is resized (long
+    // lines showed up as two columns, and sometimes a whole block of the canvas
+    // stayed blank) while xterm's buffer was perfectly correct — a repaint
+    // cleared it. The default DOM renderer is slower on huge bursts but it
+    // always draws exactly what the buffer holds, which matters more here than
+    // the throughput of a build log.
 
     termRef.current = term;
     fitRef.current = fit;
@@ -187,6 +185,26 @@ export default function TerminalOutput({
       }
     };
 
+    // WebView2 can suspend the render surface while the window is minimized, and
+    // restoring it does not always change the host's size — so ResizeObserver
+    // stays quiet and the terminal keeps showing the stale surface until a
+    // resize (maximizing) forces it to repaint. Come back through focus /
+    // visibility / resize and repaint explicitly.
+    const repaint = () => {
+      fitVisible();
+      try {
+        term.refresh(0, Math.max(0, term.rows - 1));
+      } catch {
+        /* terminal disposed */
+      }
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") repaint();
+    };
+    window.addEventListener("focus", repaint);
+    window.addEventListener("resize", repaint);
+    document.addEventListener("visibilitychange", onVisibility);
+
     const disposable = term.onData((data) => onDataRef.current(data));
 
     // Ctrl/Cmd + `+` / `-` / `0` is handled by the app's window-level zoom
@@ -195,12 +213,12 @@ export default function TerminalOutput({
       if (e.type !== "keydown") return true;
       if (!(e.ctrlKey || e.metaKey)) return true;
 
-      // Copy the terminal's own selection. xterm paints into a canvas, so there
-      // is no DOM selection for the browser — or for the panel's own Ctrl+C
-      // handler — to reach. With nothing selected the key must keep reaching the
-      // program as SIGINT (^C), hence the `hasSelection()` test instead of
-      // binding the chord outright. Returning false keeps xterm from encoding
-      // `\x03`, exactly as the zoom branch below does.
+      // Copy the terminal's own selection. xterm keeps the selection in its
+      // rendered rows rather than in a browser selection, so the panel's Ctrl+C
+      // handler cannot reach it. With nothing selected the key must keep
+      // reaching the program as SIGINT (^C), hence the `hasSelection()` test
+      // instead of binding the chord outright. Returning false keeps xterm from
+      // encoding `\x03`, exactly as the zoom branch below does.
       if (e.key.toLowerCase() === "c" && !e.altKey && !e.getModifierState("AltGraph") && term.hasSelection()) {
         e.preventDefault();
         e.stopPropagation();
@@ -270,6 +288,9 @@ export default function TerminalOutput({
       cancelAnimationFrame(initial);
       ro.disconnect();
       mo.disconnect();
+      window.removeEventListener("focus", repaint);
+      window.removeEventListener("resize", repaint);
+      document.removeEventListener("visibilitychange", onVisibility);
       host.removeEventListener("keydown", swallowKeys);
       host.removeEventListener("keyup", swallowKeys);
       host.removeEventListener("mouseup", focusOnClick);
