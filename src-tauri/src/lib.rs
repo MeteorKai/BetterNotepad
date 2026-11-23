@@ -2,6 +2,7 @@ mod blanksweep;
 mod commands;
 mod pty;
 mod runlog;
+mod session;
 mod shell_menu;
 mod update_diagnostics;
 mod update_installation;
@@ -50,6 +51,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::read_file,
             commands::file_fingerprint,
+            commands::check_file_revision,
+            runlog::clear_run_logs,
+            session::load_session_backup,
+            session::save_session_backup,
             commands::write_file,
             commands::file_exists,
             commands::get_file_name,
@@ -65,6 +70,7 @@ pub fn run() {
             commands::stop_program,
             commands::write_stdin,
             commands::search_in_files,
+            commands::cancel_file_search,
             pty::pty_open,
             pty::pty_write,
             pty::pty_resize,
@@ -80,7 +86,8 @@ pub fn run() {
             // each session's job object is what stops a script's own children
             // from surviving BetterNotepad (see `pty.rs`, hazard 2).
             if let tauri::WindowEvent::Destroyed = event {
-                pty::close_all(&window.app_handle().clone());
+                commands::stop_all_programs(window.app_handle());
+                pty::close_all(window.app_handle());
             }
         })
         .run(tauri::generate_context!())

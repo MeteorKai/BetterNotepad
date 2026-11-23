@@ -79,7 +79,7 @@ pub(crate) struct PtySession {
     master: Box<dyn MasterPty + Send>,
     /// The write half. `take_writer()` is one-shot, so we hold it for the
     /// lifetime of the session instead of fetching it per keystroke.
-    writer: Box<dyn Write + Send>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Box<dyn Child + Send + Sync>,
     /// Windows job object owning the process tree. Dropping it kills every
     /// descendant — see hazard 2. `None` on other platforms, and also `None`
@@ -211,7 +211,7 @@ fn prime_utf8_console(slave: &Box<dyn SlavePty + Send>) {
 /// Owns a job object handle. Dropping it terminates every process in the job,
 /// because the job was created with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`.
 #[cfg(windows)]
-struct JobHandle(windows_sys::Win32::Foundation::HANDLE);
+pub(crate) struct JobHandle(windows_sys::Win32::Foundation::HANDLE);
 
 // A Win32 HANDLE is just an index into the process's kernel handle table; the
 // kernel object it refers to is shared and thread-safe. Sending the handle to
@@ -243,18 +243,20 @@ impl JobHandle {
             let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
             info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
 
-            SetInformationJobObject(
+            let configured = SetInformationJobObject(
                 handle,
                 JobObjectExtendedLimitInformation,
                 &info as *const _ as *const std::ffi::c_void,
                 std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
             );
 
-            // Even if SetInformationJobObject failed, the handle is still
-            // usable for assignment, so we return it rather than making callers
-            // handle two shapes of "no job".
-            Some(JobHandle(handle))
+            let job = JobHandle(handle);
+            if configured != 0 { Some(job) } else { None }
         }
+    }
+
+    pub(crate) fn for_process(pid: u32) -> Option<Self> {
+        Self::new().filter(|job| job.assign(pid))
     }
 
     /// Attach a running process (and, implicitly, its future descendants).
@@ -312,6 +314,7 @@ pub fn pty_open(
     cols: u16,
     rows: u16,
     on_data: Channel<PtyChunk>,
+    record_output: Option<bool>,
 ) -> Result<(), String> {
     // Reject a duplicate id rather than silently replacing a live session and
     // leaking its process tree.
@@ -388,16 +391,7 @@ pub fn pty_open(
 
     // Hazard 2: own the process tree so "stop" and app exit clean up fully.
     #[cfg(windows)]
-    let job = {
-        let handle = JobHandle::new();
-        if let (Some(job), Some(pid)) = (handle.as_ref(), pid) {
-            // A failure here is not fatal — we just lose grandchild cleanup,
-            // which `stop_program`-style killing of the direct child still
-            // covers for the common case.
-            let _ = job.assign(pid);
-        }
-        handle
-    };
+    let job = pid.and_then(JobHandle::for_process);
 
     // Set by the pump below, waited on by whoever reports the exit. Declared
     // here because the session — and therefore `pty_close` — has to be able to
@@ -411,7 +405,7 @@ pub fn pty_open(
             id.clone(),
             PtySession {
                 master: pair.master,
-                writer,
+                writer: Arc::new(Mutex::new(writer)),
                 child,
                 #[cfg(windows)]
                 job,
@@ -424,18 +418,16 @@ pub fn pty_open(
     // concurrent-spawn hazard only covers creation.
     drop(_spawn_guard);
 
-    // The complete session output goes to a file as well as to xterm. xterm's
-    // scrollback is a cap — a program that prints more than it holds loses its
-    // early output for good — and the log has none. Registered by id so both
-    // the exit-watch thread and `pty_close` can hand the path to the frontend.
-    let log = app.state::<runlog::RunLogs>().start(&app, &id);
+    // Retain a size-limited log independent of xterm's scrollback.
+    let log = app.state::<runlog::RunLogs>().start(&app, &id, record_output == Some(true));
 
     // Reader thread. Blocking reads stay off the Tauri event loop, and the
     // loop only ends when the master is closed or the child exits (EOF).
     //
     // The bytes go to the pump below rather than straight to the channel: see
     // PTY_FLUSH_MS for why one message per read is not an option.
-    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    // Backpressure bounds the queued output to 512 KiB even if the pump stalls.
+    let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(64);
     std::thread::spawn(move || {
         let mut buf = vec![0u8; 8192];
         loop {
@@ -552,10 +544,9 @@ pub fn pty_open(
             Some(session) => match session.child.try_wait() {
                 Ok(Some(status)) => {
                     let code = Some(status.exit_code() as i32);
-                    // Removing the session drops the master (EOF for the reader
-                    // thread) and the job handle (kills any stragglers).
-                    map.remove(&id3);
+                    let session = map.remove(&id3);
                     drop(map);
+                    if let Some(session) = session { close_session(session); }
                     send_exit(code);
                     break;
                 }
@@ -563,8 +554,9 @@ pub fn pty_open(
                     drop(map);
                 }
                 Err(_) => {
-                    map.remove(&id3);
+                    let session = map.remove(&id3);
                     drop(map);
+                    if let Some(session) = session { close_session(session); }
                     send_exit(None);
                     break;
                 }
@@ -582,24 +574,16 @@ pub fn pty_open(
 /// Send input to the program. Raw bytes from xterm.js — arrow keys, Ctrl+C and
 /// the like all arrive as escape sequences and are forwarded verbatim.
 #[tauri::command]
-pub fn pty_write(app: AppHandle, id: String, data: String) -> Result<(), String> {
-    let state = app.state::<PtyState>();
-    let mut map = state.inner().0.lock().unwrap();
-    let session = map
-        .get_mut(&id)
+pub async fn pty_write(app: AppHandle, id: String, data: String) -> Result<(), String> {
+    let writer = app.state::<PtyState>().0.lock().map_err(|e| e.to_string())?
+        .get(&id).map(|session| Arc::clone(&session.writer))
         .ok_or_else(|| "No such terminal session".to_string())?;
-
-    session
-        .writer
-        .write_all(data.as_bytes())
-        .map_err(|e| format!("Failed to write to the terminal: {}", e))?;
-    // Without this the child's `input()` sits waiting while our bytes stay in
-    // the buffer.
-    session
-        .writer
-        .flush()
-        .map_err(|e| format!("Failed to flush the terminal: {}", e))?;
-    Ok(())
+    // A blocked paste must not block Stop or a window repaint.
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut writer = writer.lock().map_err(|e| e.to_string())?;
+        writer.write_all(data.as_bytes()).and_then(|_| writer.flush())
+            .map_err(|e| format!("Failed to write to the terminal: {e}"))
+    }).await.map_err(|e| e.to_string())?
 }
 
 /// Tell the PTY about a new viewport size. Skipping this makes long lines wrap
@@ -623,6 +607,16 @@ pub fn pty_resize(app: AppHandle, id: String, cols: u16, rows: u16) -> Result<()
         .map_err(|e| format!("Failed to resize the terminal: {}", e))
 }
 
+fn close_session(mut session: PtySession) {
+    // Close the job first so a descendant can't hold the console open while
+    // ClosePseudoConsole waits. Do this outside the registry lock.
+    #[cfg(windows)]
+    drop(session.job.take());
+    let _ = session.child.kill();
+    let _ = session.child.wait();
+    drop(session);
+}
+
 /// Close a session, and report where its complete output was written.
 ///
 /// Dropping the job handle terminates the whole process tree. The return value
@@ -641,17 +635,9 @@ pub fn pty_close(app: AppHandle, id: String) -> Result<Option<RunLogInfo>, Strin
         // `pty_write` and the exit-watch thread for the length of the wait.
         map.remove(&id)
     };
-    if let Some(mut session) = session {
+    if let Some(session) = session {
         let pump_done = session.pump_done.clone();
-        // Best effort: the job drop below is what actually reaps descendants on
-        // Windows, but killing the direct child first makes the exit status
-        // deterministic on platforms without job objects.
-        let _ = session.child.kill();
-        let _ = session.child.wait();
-        // Dropping the session closes the pseudo-console, which is what drives
-        // the reader to EOF and the pump to hand over its tail. Waiting before
-        // this would be waiting for something that cannot happen yet.
-        drop(session);
+        close_session(session);
         let deadline = Instant::now() + Duration::from_millis(600);
         while !pump_done.load(Ordering::SeqCst) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(5));
@@ -667,17 +653,12 @@ pub fn close_all(app: &AppHandle) {
     // Sessions have to be dropped — closing each pseudo-console — before the
     // wait, for the same reason `pty_close` does it: only then does a pump reach
     // its tail, and only then is the flush below worth doing.
-    let pending: Vec<(String, Arc<AtomicBool>)> = {
-        let state = app.state::<PtyState>();
-        let mut map = state.inner().0.lock().unwrap();
-        let mut pending = Vec::new();
-        for (id, mut session) in map.drain() {
-            pending.push((id, session.pump_done.clone()));
-            let _ = session.child.kill();
-            drop(session);
-        }
-        pending
-    };
+    let sessions = std::mem::take(&mut *app.state::<PtyState>().0.lock().unwrap());
+    let pending: Vec<_> = sessions.into_iter().map(|(id, session)| {
+        let done = session.pump_done.clone();
+        close_session(session);
+        (id, done)
+    }).collect();
     let deadline = Instant::now() + Duration::from_millis(600);
     for (id, done) in pending {
         while !done.load(Ordering::SeqCst) && Instant::now() < deadline {

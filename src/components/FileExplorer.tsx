@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import type { FileNode } from "../hooks/useFileExplorer";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { pathKey, type FileNode } from "../hooks/useFileExplorer";
 import { t } from "../i18n";
 
 interface FileExplorerProps {
@@ -39,7 +39,8 @@ interface TreeNodeProps {
 
 function parentDir(p: string): string {
   const idx = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
-  return idx === -1 ? p : p.slice(0, idx);
+  if (idx === 2 && /^[a-z]:/i.test(p)) return p.slice(0, 3);
+  return idx < 0 ? p : p.slice(0, idx) || p.slice(0, 1);
 }
 
 function TreeNode({
@@ -62,7 +63,7 @@ function TreeNode({
   onContextMenu,
 }: TreeNodeProps) {
   const indent = 8 + depth * 14;
-  const isActive = node.path === activePath;
+  const isActive = activePath !== null && pathKey(node.path) === pathKey(activePath);
   const isRenaming = node.path === renamingPath;
 
   if (node.isDir) {
@@ -222,22 +223,30 @@ export default function FileExplorer({
   const [creating, setCreating] = useState<{ parentPath: string; isDir: boolean } | null>(null);
   const [createDraft, setCreateDraft] = useState("");
 
-  // Reveal the active file: expand its ancestors, then scroll it into view.
+  const expandRef = useRef(onExpandTo);
+  expandRef.current = onExpandTo;
+  const rootPath = root?.path;
+  // Only reveal on navigation. Watcher refreshes or a manual collapse should
+  // not reopen the active file's folder.
   useEffect(() => {
+    if (!activePath || !rootPath) return;
     let cancelled = false;
-    (async () => {
-      if (!activePath || !root) return;
-      await onExpandTo(activePath);
+    let frame: number | undefined;
+    void expandRef.current(activePath).then(() => {
       if (cancelled) return;
-      const el = Array.from(document.querySelectorAll("[data-path]")).find(
-        (n) => n.getAttribute("data-path") === activePath
-      );
-      el?.scrollIntoView({ block: "nearest" });
-    })();
+      frame = requestAnimationFrame(() => {
+        const key = pathKey(activePath);
+        const item = Array.from(document.querySelectorAll<HTMLElement>("[data-path]")).find(
+          (node) => node.dataset.path !== undefined && pathKey(node.dataset.path) === key
+        );
+        item?.scrollIntoView({ block: "nearest" });
+      });
+    });
     return () => {
       cancelled = true;
+      if (frame !== undefined) cancelAnimationFrame(frame);
     };
-  }, [activePath, root, onExpandTo]);
+  }, [activePath, rootPath]);
 
   useEffect(() => {
     if (!menu) return;

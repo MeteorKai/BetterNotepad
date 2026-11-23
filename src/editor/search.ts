@@ -39,13 +39,11 @@ export function findMatches(
     }
     return { matches, error: false };
   }
-  const haystack = caseSensitive ? text : text.toLowerCase();
-  const needle = caseSensitive ? query : query.toLowerCase();
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(escaped, caseSensitive ? "gu" : "giu");
   const matches: Match[] = [];
-  let idx = haystack.indexOf(needle);
-  while (idx !== -1) {
-    matches.push({ start: idx, end: idx + needle.length });
-    idx = haystack.indexOf(needle, idx + needle.length);
+  for (const match of text.matchAll(re)) {
+    matches.push({ start: match.index!, end: match.index! + match[0].length });
   }
   return { matches, error: false };
 }

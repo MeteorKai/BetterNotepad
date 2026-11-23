@@ -17,6 +17,7 @@ interface SearchFileResult {
 interface SearchResults {
   files: SearchFileResult[];
   filesTruncated: boolean;
+  filesIncomplete: number;
 }
 
 interface GlobalSearchPanelProps {
@@ -25,10 +26,13 @@ interface GlobalSearchPanelProps {
   onClose: () => void;
 }
 
-function highlightLine(text: string, query: string) {
+let searchGeneration = Date.now() * 1024;
+
+function highlightLine(text: string, query: string, caseSensitive: boolean) {
   if (!query) return text;
-  const idx = text.toLowerCase().indexOf(query.toLowerCase());
-  if (idx === -1) return text;
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const idx = text.search(new RegExp(escaped, caseSensitive ? "u" : "iu"));
+  if (idx < 0) return text;
   return (
     <>
       {text.slice(0, idx)}
@@ -49,7 +53,7 @@ export default function GlobalSearchPanel({ root, onOpenResult, onClose }: Globa
   const requestIdRef = useRef(0);
 
   const doSearch = useCallback(
-    async (q: string, cs: boolean, requestId: number) => {
+    async (q: string, cs: boolean, requestId: number, generation: number) => {
       if (requestId !== requestIdRef.current) return;
       if (!root || !q.trim()) {
         if (requestId === requestIdRef.current) {
@@ -64,12 +68,13 @@ export default function GlobalSearchPanel({ root, onOpenResult, onClose }: Globa
           root,
           query: q,
           caseSensitive: cs,
+          generation,
         });
         if (requestId === requestIdRef.current) setResults(res);
       } catch (err) {
         if (requestId === requestIdRef.current) {
           setResults(null);
-          setError(String(err));
+          setError(String(err).includes("SEARCH_QUERY_TOO_LONG") ? t("globalSearch.queryTooLong") : String(err));
         }
       } finally {
         if (requestId === requestIdRef.current) setSearching(false);
@@ -84,12 +89,17 @@ export default function GlobalSearchPanel({ root, onOpenResult, onClose }: Globa
     setError(null);
     setSearching(Boolean(root && query.trim()));
     if (timerRef.current) window.clearTimeout(timerRef.current);
+    const generation = searchGeneration + 1;
+    searchGeneration += 2;
+    let started = false;
     timerRef.current = window.setTimeout(() => {
-      void doSearch(query, caseSensitive, requestId);
+      started = Boolean(root && query.trim());
+      void doSearch(query, caseSensitive, requestId, generation);
     }, 400);
     return () => {
       if (timerRef.current) window.clearTimeout(timerRef.current);
       requestIdRef.current++;
+      if (started) void invoke("cancel_file_search", { generation: generation + 1 }).catch(() => {});
     };
   }, [root, query, caseSensitive, doSearch]);
 
@@ -150,6 +160,11 @@ export default function GlobalSearchPanel({ root, onOpenResult, onClose }: Globa
             : t("globalSearch.partialResults")}
         </div>
       )}
+      {!!results?.filesIncomplete && (
+        <div role="status" className="px-3 pb-2 text-xs text-warn">
+          {t("globalSearch.skippedFiles", { count: results.filesIncomplete })}
+        </div>
+      )}
       {root && results && results.files.length > 0 && (
         <div className="max-h-[45vh] overflow-y-auto px-3 pb-2">
           {results.files.map((r) => (
@@ -169,7 +184,7 @@ export default function GlobalSearchPanel({ root, onOpenResult, onClose }: Globa
                   <span className="inline-block w-10 text-right mr-2 text-faint text-xs select-none">
                     {m.line}
                   </span>
-                  <span className="text-xs text-ink font-mono break-all">{highlightLine(m.text, query)}</span>
+                  <span className="text-xs text-ink font-mono break-all">{highlightLine(m.text, query, caseSensitive)}</span>
                 </button>
               ))}
             </div>

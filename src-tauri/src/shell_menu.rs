@@ -126,7 +126,13 @@ pub fn context_menu_command() -> Option<String> {
 /// The frontend calls this on every start while the setting is on, which also
 /// repairs the recorded path if the executable has moved since.
 #[tauri::command]
-pub fn set_context_menu(enabled: bool, label: String) -> Result<(), String> {
+pub fn set_context_menu(app: tauri::AppHandle, enabled: bool, label: String) -> Result<(), String> {
+    // A loose build must never replace or remove the installed app’s menu.
+    if app.config().product_name.as_deref() != Some("BetterNotepad")
+        || !crate::update_installation::update_installation_supported(app)
+    {
+        return Ok(());
+    }
     if !enabled {
         return registry::disable();
     }

@@ -24,7 +24,7 @@ const tab = (filePath, patch = {}) => ({
 // survives renders; effects, native dialogs and filesystem I/O are mocked.
 function harness(initialTabs, operations = {}) {
   const slots = [];
-  const calls = { deletes: [], renames: [], writes: [], alerts: [], prompts: [], stops: [] };
+  const calls = { deletes: [], renames: [], writes: [], alerts: [], prompts: [], stops: [], backups: [] };
   let cursor = 0;
   let tabs;
   let prepareUpdate;
@@ -59,10 +59,21 @@ function harness(initialTabs, operations = {}) {
       return operations.renameNode ? operations.renameNode(target, name) : `D:\\work\\${name}`;
     },
   };
-  const localStorage = { getItem: (key) => storage.get(key) ?? null, setItem: (key, value) => storage.set(key, value) };
+  const localStorage = {
+    getItem: (key) => storage.get(key) ?? null,
+    setItem: (key, value) => {
+      if (operations.sessionError && key === "betternotepad.session") throw new Error("QuotaExceededError");
+      storage.set(key, value);
+    },
+  };
   const invoke = async (command, args) => {
     if (command === "write_file") { calls.writes.push(args); return operations.writeFile ? operations.writeFile(args) : "saved-disk"; }
     if (command === "read_file") return operations.readFile ? operations.readFile(args.path) : { content: "opened", encoding: "utf-8", fingerprint: "disk" };
+    if (command === "save_session_backup") {
+      calls.backups.push(args.contents);
+      return operations.writeBackup?.(args.contents);
+    }
+    if (command === "file_fingerprint") return operations.fingerprint ?? null;
     if (command === "get_file_name") return String(args.path).split(/[\\/]/).pop();
     throw new Error(`Unexpected native command: ${command}`);
   };
@@ -75,7 +86,7 @@ function harness(initialTabs, operations = {}) {
       if (id === "react") return react;
       if (id === "react/jsx-runtime") return require(id);
       if (id === "@tauri-apps/api/core") return { invoke };
-      if (id === "@tauri-apps/plugin-dialog") return { ask: async (message) => {
+      if (id === "@tauri-apps/plugin-dialog") return { save: async () => operations.savePath, ask: async (message) => {
         calls.prompts.push(message);
         if (operations.onAsk) operations.onAsk(result);
         return operations.approve !== false;
@@ -120,12 +131,12 @@ function harness(initialTabs, operations = {}) {
     return element.type === "TabBar" ? element.props : findTabBar(element.props?.children);
   }
   const result = {
-    calls,
+    calls, storage,
     get tabs() { return tabs; },
     prepareUpdate: () => prepareUpdate(),
     render() {
       cursor = 0;
-      const tree = App();
+      const tree = App({ desktopSession: operations.desktopSession });
       result.explorer = findExplorer(tree);
       result.tabBar = findTabBar(tree);
     },
@@ -133,6 +144,145 @@ function harness(initialTabs, operations = {}) {
   result.render();
   return result;
 }
+
+test("Save As refuses to replace a destination already open in another tab", async () => {
+  const target = "D:\\work\\destination.txt";
+  const h = harness([tab("D:\\work\\a.txt", { modified: true }), tab(target)], {
+    savePath: "d:/WORK/destination.txt",
+  });
+  await h.tabs.saveActiveAs();
+  h.render();
+  assert.equal(h.calls.writes.length, 0);
+  assert.ok(h.tabs.fileNotice);
+});
+
+test("Save As guards both an existing and a previously missing destination", async () => {
+  for (const fingerprint of ["existing-version", null]) {
+    const h = harness([tab("D:\\work\\a.txt", { modified: true })], {
+      savePath: "D:\\work\\destination.txt", fingerprint,
+    });
+    await h.tabs.saveActiveAs();
+    assert.equal(h.calls.writes.length, 1);
+    assert.equal(h.calls.writes[0].expectedFingerprint, fingerprint ?? undefined);
+    assert.equal(h.calls.writes[0].expectMissing, fingerprint === null);
+  }
+});
+
+test("Save All reports an edit to a previously clean tab during a write", async () => {
+  let finish;
+  const pending = new Promise((resolve) => { finish = resolve; });
+  const h = harness([tab("D:\\work\\a.txt", { modified: true }), tab("D:\\work\\b.txt")], {
+    writeFile: () => pending,
+  });
+  const saving = h.tabs.saveAll();
+  h.tabs.setTabEncoding(h.tabs.tabs[1].id, "gbk");
+  h.render();
+  finish("saved");
+  assert.equal(await saving, false);
+  h.render();
+  assert.equal(h.tabs.tabs[1].modified, true);
+  assert.equal(h.tabs.tabs[1].encoding, "gbk");
+});
+
+test("a failed session write keeps the earlier backup and exposes the failure", async () => {
+  const options = { sessionError: true };
+  const h = harness([tab("D:\\work\\a.txt", { modified: true })], options);
+  const original = h.storage.get("betternotepad.session");
+  assert.equal(await h.tabs.persistSessionNow(), false);
+  h.render();
+  assert.equal(h.tabs.sessionError, "write");
+  assert.equal(h.storage.get("betternotepad.session"), original);
+  options.sessionError = false;
+  assert.equal(await h.tabs.persistSessionNow(), true);
+  h.render();
+  assert.equal(h.tabs.sessionError, false);
+});
+
+test("a desktop backup over the size limit preserves the draft and reports the limit", async () => {
+  const h = harness([{ filePath: null, fileName: "draft.txt", modified: true, content: "current draft" }], {
+    desktopSession: { contents: null }, writeBackup: async () => { throw new Error("SESSION_TOO_LARGE"); },
+  });
+  assert.equal(await h.tabs.persistSessionNow(), false);
+  h.render();
+  assert.equal(h.tabs.sessionError, "limit");
+  assert.equal(h.tabs.activeTab.content, "current draft");
+});
+
+test("desktop migration keeps legacy drafts and bypasses the localStorage quota", async () => {
+  const draft = "你好".repeat(1_000_000);
+  const h = harness([{ filePath: null, fileName: "draft.txt", modified: true, content: draft }], {
+    desktopSession: { contents: null }, sessionError: true,
+  });
+  assert.equal(h.tabs.activeTab.content, draft);
+  assert.equal(await h.tabs.persistSessionNow(), true);
+  assert.equal(JSON.parse(h.calls.backups[0]).tabs[0].content, draft);
+  assert.equal(JSON.parse(h.storage.get("betternotepad.session")).tabs[0].content, draft);
+});
+
+test("the desktop backup wins over legacy data, even when it has no drafts", () => {
+  const h = harness([{ filePath: null, fileName: "old", modified: true, content: "legacy" }], {
+    desktopSession: { contents: JSON.stringify({ version: 1, activeIndex: 0, tabs: [] }) },
+  });
+  assert.equal(h.tabs.activeTab.content, "");
+});
+
+test("a restored placeholder cannot be edited or saved before its contents load", async () => {
+  const options = { readFile: async () => { throw new Error("FILE_TOO_LARGE"); } };
+  const h = harness([tab("D:\\work\\large.txt", { content: "" })], options);
+  assert.equal(h.tabs.activeTab.needsDiskLoad, true);
+  h.tabs.setActiveContent("should not replace disk contents");
+  h.tabs.setTabEncoding(h.tabs.activeTabId, "gbk");
+  await h.tabs.saveActive();
+  await h.tabs.saveActiveAs();
+  await h.tabs.overwriteExternalChange(h.tabs.activeTabId);
+  assert.equal(h.calls.writes.length, 0);
+  await h.tabs.reloadTabFromDisk(h.tabs.activeTabId);
+  h.render();
+  assert.equal(h.tabs.activeTab.modified, false);
+  assert.match(h.tabs.activeTab.diskLoadError, /64 MiB/);
+  options.readFile = async () => ({ content: "actual disk contents", encoding: "utf-8", fingerprint: "new" });
+  await h.tabs.reloadTabFromDisk(h.tabs.activeTabId);
+  h.render();
+  assert.equal(h.tabs.activeTab.needsDiskLoad, false);
+  assert.equal(h.tabs.activeTab.diskLoadError, undefined);
+  assert.equal(h.tabs.activeTab.content, "actual disk contents");
+});
+
+test("an unloaded missing file stays a placeholder across repeated recovery", async () => {
+  const initial = JSON.stringify({ version: 1, activeIndex: 0,
+    tabs: [tab("D:\\work\\missing.txt", { content: "", externalChange: "missing", needsDiskLoad: true })] });
+  const first = harness([], { desktopSession: { contents: initial } });
+  assert.equal(first.tabs.activeTab.needsDiskLoad, true);
+  assert.equal(await first.tabs.persistSessionNow(), true);
+  const restored = harness([], { desktopSession: { contents: first.calls.backups[0] } });
+  assert.equal(restored.tabs.activeTab.needsDiskLoad, true);
+  assert.equal(restored.tabs.activeTab.externalChange, "missing");
+});
+
+test("unreadable desktop backups are preserved", async () => {
+  const h = harness([], { desktopSession: { contents: "{not JSON" } });
+  assert.equal(h.tabs.sessionLoadFailed, true);
+  assert.equal(await h.tabs.persistSessionNow(), false);
+  assert.equal(h.calls.backups.length, 0);
+});
+
+test("discard waits for an in-flight autosave and blocks subsequent autosaves", async () => {
+  let finishFirst;
+  const first = new Promise((resolve) => { finishFirst = resolve; });
+  let writes = 0;
+  const h = harness([{ filePath: null, fileName: "draft", modified: true, content: "draft" }], {
+    desktopSession: { contents: null }, writeBackup: () => ++writes === 1 ? first : undefined,
+  });
+  const autosave = h.tabs.persistSessionNow();
+  await Promise.resolve();
+  const discard = h.tabs.discardUnsavedFromSession();
+  assert.equal(await h.tabs.persistSessionNow(), false);
+  assert.equal(h.calls.backups.length, 1);
+  finishFirst();
+  assert.equal(await autosave, true);
+  assert.equal(await discard, true);
+  assert.deepEqual(JSON.parse(h.calls.backups[1]).tabs, []);
+});
 
 test("deleting an unsaved file is blocked and activates its tab", async () => {
   const file = `${folder}\\a.txt`;
@@ -267,6 +417,36 @@ test("update saves all dirty tabs before persisting and stopping terminals", asy
   assert.equal(h.calls.writes.length, 2);
   assert.equal(h.tabs.unsavedTabs.length, 0);
   assert.deepEqual(h.calls.stops, ["run", "shell"]);
+});
+
+test("a failed recovery backup blocks preparation without stopping the terminal", async () => {
+  const h = harness([tab("D:\\work\\a.txt")], { running: true, sessionError: true });
+  assert.equal(await h.prepareUpdate(), false);
+  assert.deepEqual(h.calls.stops, []);
+  assert.match(h.calls.alerts[0], /已取消安装更新/);
+});
+
+test("update verifies that an unchanged desktop snapshot can still be committed", async () => {
+  const options = {
+    desktopSession: { contents: null },
+    writeBackup: async () => {},
+  };
+  const h = harness([], options);
+  assert.equal(await h.tabs.persistSessionNow(), true);
+  options.writeBackup = async () => { throw new Error("destination is no longer writable"); };
+  assert.equal(await h.tabs.persistSessionNow(false), true);
+  assert.equal(h.calls.backups.length, 1);
+  assert.equal(await h.prepareUpdate(), false);
+  assert.equal(h.calls.backups.length, 2);
+  assert.deepEqual(h.calls.stops, []);
+  assert.equal(await h.tabs.persistSessionNow(false), false);
+  h.render();
+  assert.equal(h.tabs.sessionError, "write");
+  options.writeBackup = async () => {};
+  assert.equal(await h.tabs.persistSessionNow(false), true);
+  h.render();
+  assert.equal(h.tabs.sessionError, false);
+  assert.equal(h.calls.backups.length, 4);
 });
 
 test("failed update save and declined terminal shutdown both stop installation", async () => {

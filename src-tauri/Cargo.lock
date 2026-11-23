@@ -2317,13 +2317,15 @@ dependencies = [
 
 [[package]]
 name = "notepad-app"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "chrono",
  "encoding_rs",
  "portable-pty",
+ "regex",
  "reqwest",
  "rustls",
+ "same-file",
  "serde",
  "serde_json",
  "tauri",
@@ -2333,6 +2335,7 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
+ "tempfile",
  "trash",
  "windows-sys 0.59.0",
  "winreg 0.55.0",

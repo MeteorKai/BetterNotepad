@@ -51,7 +51,7 @@ pub async fn update_endpoint_status(app: tauri::AppHandle) -> Result<u16, String
 #[cfg(test)]
 mod tests {
     use super::probe_endpoint;
-    use std::io::{Read, Write};
+    use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
     use std::time::{Duration, Instant};
 
@@ -73,12 +73,11 @@ mod tests {
                         Err(error) => panic!("{error}"),
                     }
                 };
-                stream
-                    .set_read_timeout(Some(Duration::from_secs(2)))
-                    .unwrap();
-                let mut request = [0; 4096];
-                let size = stream.read(&mut request).unwrap();
-                assert!(String::from_utf8_lossy(&request[..size]).starts_with("GET /latest.json "));
+                stream.set_nonblocking(false).unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+                let mut request = String::new();
+                BufReader::new(&stream).read_line(&mut request).unwrap();
+                assert!(request.starts_with("GET /latest.json "));
                 write!(
                     stream,
                     "HTTP/1.1 {status} Test\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"

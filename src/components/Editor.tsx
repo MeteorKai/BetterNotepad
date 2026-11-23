@@ -615,14 +615,15 @@ const Editor = forwardRef<EditorHandle, EditorProps>(
           const { query, caseSensitive, regex, matches, current, error } = search;
           if (!query || !matches.length) return { current: 0, total: 0, error };
           const { start, end } = matches[current];
-          // Regex mode expands capture-group references ($1, $&, ...). The
-          // matched span matches the pattern exactly, so a replace on that span
-          // yields the substitution for the current match only.
-          const replacedPart = regex
-            ? view.state
-                .sliceDoc(start, end)
-                .replace(new RegExp(query, caseSensitive ? "" : "i"), replacement)
-            : replacement;
+          let replacedPart = replacement;
+          if (regex) {
+            const source = view.state.doc.toString();
+            // Keep the original document context for assertions and capture groups.
+            const selected = new RegExp(query, caseSensitive ? "y" : "iy");
+            selected.lastIndex = start;
+            const replaced = source.replace(selected, replacement);
+            replacedPart = replaced.slice(start, replaced.length - (source.length - end));
+          }
           view.dispatch({
             changes: { from: start, to: end, insert: replacedPart },
             userEvent: "input.replace",

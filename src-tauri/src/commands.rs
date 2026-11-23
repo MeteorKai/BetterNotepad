@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -30,9 +30,13 @@ pub struct FileContent {
     pub content: String,
     pub encoding: String,
     pub fingerprint: String,
+    pub stamp: Option<String>,
 }
 
 const FILE_CHANGED_EXTERNALLY: &str = "FILE_CHANGED_EXTERNALLY";
+const FILE_BUSY: &str = "FILE_BUSY";
+const MAX_EDITOR_FILE_BYTES: u64 = 64 * 1024 * 1024;
+static SAVE_COMMIT_LOCK: Mutex<()> = Mutex::new(());
 const FNV64_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV64_PRIME: u64 = 0x100000001b3;
 
@@ -51,14 +55,69 @@ fn fingerprint_bytes(bytes: &[u8]) -> String {
     )
 }
 
+async fn file_io<T: Send + 'static>(task: impl FnOnce() -> Result<T, String> + Send + 'static) -> Result<T, String> {
+    tauri::async_runtime::spawn_blocking(task).await.map_err(|err| err.to_string())?
+}
+
 #[tauri::command]
-pub fn file_fingerprint(path: String) -> Result<Option<String>, String> {
-    let file = match fs::File::open(&path) {
+pub async fn file_fingerprint(path: String) -> Result<Option<String>, String> {
+    file_io(move || fingerprint_path(Path::new(&path))).await
+}
+
+fn file_stamp(metadata: &fs::Metadata) -> Option<String> {
+    let modified = metadata.modified().ok()?;
+    let created = metadata.created().ok();
+    Some(format!("{}:{modified:?}:{created:?}", metadata.len()))
+}
+
+#[derive(Serialize)]
+pub struct FileRevision {
+    fingerprint: Option<String>,
+    stamp: Option<String>,
+    unchanged: bool,
+}
+
+fn check_revision(path: &Path, known_stamp: Option<&str>) -> Result<FileRevision, String> {
+    let mut file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(FileRevision { fingerprint: None, stamp: None, unchanged: false });
+        }
+        Err(err) => return Err(err.to_string()),
+    };
+    let before = file.metadata().ok().as_ref().and_then(file_stamp);
+    if known_stamp.is_some() && before.as_deref() == known_stamp {
+        return Ok(FileRevision { fingerprint: None, stamp: before, unchanged: true });
+    }
+    let fingerprint = fingerprint_reader(&mut file)?;
+    let after = file.metadata().ok().as_ref().and_then(file_stamp);
+    if before != after {
+        return Err(FILE_CHANGED_EXTERNALLY.into());
+    }
+    Ok(FileRevision { fingerprint: Some(fingerprint), stamp: after, unchanged: false })
+}
+
+#[tauri::command]
+pub async fn check_file_revision(path: String, known_stamp: Option<String>) -> Result<FileRevision, String> {
+    file_io(move || check_revision(Path::new(&path), known_stamp.as_deref())).await
+}
+
+fn fingerprint_path(path: &Path) -> Result<Option<String>, String> {
+    let file = match fs::File::open(path) {
         Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(err) => return Err(format!("Failed to fingerprint file: {}", err)),
     };
-    let mut reader = BufReader::new(file);
+    let before = file.metadata().ok().as_ref().and_then(file_stamp);
+    let fingerprint = fingerprint_reader(&file)?;
+    let after = file.metadata().ok().as_ref().and_then(file_stamp);
+    if before != after {
+        return Err(FILE_CHANGED_EXTERNALLY.into());
+    }
+    Ok(Some(fingerprint))
+}
+
+fn fingerprint_reader(mut reader: impl Read) -> Result<String, String> {
     let mut buf = [0u8; 64 * 1024];
     let (mut hash, mut len) = (FNV64_OFFSET, 0u64);
     loop {
@@ -71,36 +130,33 @@ pub fn file_fingerprint(path: String) -> Result<Option<String>, String> {
         hash = fingerprint_update(hash, &buf[..count]);
         len += count as u64;
     }
-    Ok(Some(format!("{:016x}-{}", hash, len)))
+    Ok(format!("{:016x}-{}", hash, len))
 }
 
 // Decode a file's raw bytes to UTF-8 and report the detected encoding. BOM is
 // honored first, then strict UTF-8 validation, then a GBK fallback — GBK covers
 // GB2312 and is the overwhelmingly common non-UTF-8 encoding on Chinese Windows.
-fn decode_bytes(bytes: &[u8]) -> (String, String) {
-    if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        let (text, _, _) = encoding_rs::UTF_8.decode(&bytes[3..]);
-        return (text.into_owned(), "utf-8-bom".into());
-    }
-    if bytes.starts_with(&[0xFF, 0xFE]) {
-        let (text, _, _) = encoding_rs::UTF_16LE.decode(&bytes[2..]);
-        return (text.into_owned(), "utf-16le".into());
-    }
-    if bytes.starts_with(&[0xFE, 0xFF]) {
-        let (text, _, _) = encoding_rs::UTF_16BE.decode(&bytes[2..]);
-        return (text.into_owned(), "utf-16be".into());
-    }
-    if std::str::from_utf8(bytes).is_ok() {
-        return (String::from_utf8_lossy(bytes).into_owned(), "utf-8".into());
-    }
-    let (text, _, _) = encoding_rs::GBK.decode(bytes);
-    (text.into_owned(), "gbk".into())
+fn decode_bytes(bytes: &[u8]) -> Result<(String, String), String> {
+    let (codec, name, data) = if let Some(data) = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]) {
+        (encoding_rs::UTF_8, "utf-8-bom", data)
+    } else if let Some(data) = bytes.strip_prefix(&[0xFF, 0xFE]) {
+        (encoding_rs::UTF_16LE, "utf-16le", data)
+    } else if let Some(data) = bytes.strip_prefix(&[0xFE, 0xFF]) {
+        (encoding_rs::UTF_16BE, "utf-16be", data)
+    } else if let Ok(text) = std::str::from_utf8(bytes) {
+        return Ok((text.to_owned(), "utf-8".into()));
+    } else {
+        (encoding_rs::GBK, "gbk", bytes)
+    };
+    codec.decode_without_bom_handling_and_without_replacement(data)
+        .map(|text| (text.into_owned(), name.into()))
+        .ok_or_else(|| format!("INVALID_TEXT_ENCODING: {name}"))
 }
 
 // Encode UTF-8 text back into the chosen on-disk encoding (prepending a BOM
 // where the encoding calls for one).
-fn encode_text(text: &str, encoding: &str) -> Vec<u8> {
-    match encoding {
+fn encode_text(text: &str, encoding: &str) -> Result<Vec<u8>, String> {
+    let bytes = match encoding {
         "utf-8-bom" => {
             let mut out = vec![0xEF, 0xBB, 0xBF];
             out.extend_from_slice(text.as_bytes());
@@ -122,39 +178,192 @@ fn encode_text(text: &str, encoding: &str) -> Vec<u8> {
             }
             out
         }
-        "gbk" => encoding_rs::GBK.encode(text).0.into_owned(),
-        _ => text.as_bytes().to_vec(),
-    }
+        "gbk" => {
+            let (bytes, _, had_errors) = encoding_rs::GBK.encode(text);
+            if had_errors {
+                return Err("UNREPRESENTABLE_TEXT: GBK".into());
+            }
+            bytes.into_owned()
+        }
+        "utf-8" => text.as_bytes().to_vec(),
+        _ => return Err(format!("Unsupported encoding: {encoding}")),
+    };
+    Ok(bytes)
 }
 
 #[tauri::command]
-pub fn read_file(path: String) -> Result<FileContent, String> {
-    let bytes = fs::read(&path).map_err(|e| format!("Failed to read file: {}", e))?;
-    let (content, encoding) = decode_bytes(&bytes);
+pub async fn read_file(path: String) -> Result<FileContent, String> {
+    file_io(move || read_file_impl(path)).await
+}
+
+fn read_file_impl(path: String) -> Result<FileContent, String> {
+    let mut file = fs::File::open(&path).map_err(|e| format!("Failed to read file: {e}"))?;
+    let metadata = file.metadata().map_err(|e| format!("Failed to read file metadata: {e}"))?;
+    if !metadata.is_file() {
+        return Err("The path is not a regular file".into());
+    }
+    if metadata.len() > MAX_EDITOR_FILE_BYTES {
+        return Err("FILE_TOO_LARGE".into());
+    }
+    let before = file_stamp(&metadata);
+    let mut bytes = Vec::new();
+    (&mut file).take(MAX_EDITOR_FILE_BYTES + 1).read_to_end(&mut bytes)
+        .map_err(|e| format!("Failed to read file: {e}"))?;
+    if bytes.len() as u64 > MAX_EDITOR_FILE_BYTES {
+        return Err("FILE_TOO_LARGE".into());
+    }
+    let after = file.metadata().ok().as_ref().and_then(file_stamp);
+    if before != after {
+        return Err(FILE_CHANGED_EXTERNALLY.into());
+    }
+    let (content, encoding) = decode_bytes(&bytes)?;
+    if content.contains('\0') {
+        return Err("BINARY_FILE".into());
+    }
     Ok(FileContent {
         content,
         encoding,
         fingerprint: fingerprint_bytes(&bytes),
+        stamp: after,
     })
 }
 
 #[tauri::command]
-pub fn write_file(
+pub async fn write_file(
     path: String,
     content: String,
     encoding: Option<String>,
     expected_fingerprint: Option<String>,
+    expect_missing: Option<bool>,
 ) -> Result<String, String> {
-    if let Some(expected) = expected_fingerprint {
-        if file_fingerprint(path.clone())? != Some(expected) {
+    file_io(move || write_file_impl(path, content, encoding, expected_fingerprint, expect_missing)).await
+}
+
+fn write_file_impl(
+    path: String,
+    content: String,
+    encoding: Option<String>,
+    expected_fingerprint: Option<String>,
+    expect_missing: Option<bool>,
+) -> Result<String, String> {
+    if content.contains('\0') {
+        return Err("BINARY_FILE".into());
+    }
+    let bytes = encode_text(&content, encoding.as_deref().unwrap_or("utf-8"))?;
+    let fingerprint = fingerprint_bytes(&bytes);
+    let requested = Path::new(&path);
+    let (target, permissions) = match fs::symlink_metadata(requested) {
+        Ok(_) if expect_missing == Some(true) => return Err(FILE_CHANGED_EXTERNALLY.into()),
+        Ok(_) => {
+            // Preserve a symlink by replacing its resolved target.
+            let target = requested.canonicalize().map_err(|e| e.to_string())?;
+            let metadata = fs::metadata(&target).map_err(|e| e.to_string())?;
+            if !metadata.is_file() || metadata.permissions().readonly() {
+                return Err("The destination is not a writable file".into());
+            }
+            (target, Some(metadata.permissions()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => (requested.to_path_buf(), None),
+        Err(e) => return Err(e.to_string()),
+    };
+    let parent = target.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
+    // Normal file attributes matter on Windows: the staged file becomes the
+    // user's document after rename, and must not retain FILE_ATTRIBUTE_TEMPORARY.
+    let mut staged = tempfile::Builder::new().prefix(".betternotepad-")
+        .make_in(parent, |path| {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            options.open(path)
+        })
+        .map_err(|e| format!("Failed to stage save: {e}"))?;
+    staged.write_all(&bytes).map_err(|e| format!("Failed to stage save: {e}"))?;
+    let destination_existed = permissions.is_some();
+    if let Some(permissions) = permissions {
+        staged.as_file().set_permissions(permissions).map_err(|e| e.to_string())?;
+    }
+    staged.as_file().sync_all().map_err(|e| format!("Failed to flush save: {e}"))?;
+    // Serialise commits within this app, including saves through path aliases.
+    // On Windows the guard also excludes external in-place writers while the
+    // old contents are verified and replaced. Other processes can still
+    // rename the path because replacement requires delete sharing.
+    let _commit = SAVE_COMMIT_LOCK.lock().map_err(|err| err.to_string())?;
+    let _verified = if destination_existed || expected_fingerprint.is_some() {
+        Some(verify_save_target(requested, &target, expected_fingerprint.as_deref())?)
+    } else {
+        None
+    };
+    if !destination_existed {
+        staged.persist_noclobber(&target).map_err(|e| {
+            if e.error.kind() == std::io::ErrorKind::AlreadyExists {
+                FILE_CHANGED_EXTERNALLY.into()
+            } else {
+                format!("Failed to save file: {}", e.error)
+            }
+        })?;
+    } else {
+        // Rust's Windows rename supports replacing open files that share
+        // deletion on modern Windows. MoveFileEx alone rejects that case.
+        fs::rename(staged.path(), &target).map_err(|err| {
+            #[cfg(windows)]
+            if matches!(err.raw_os_error(), Some(5 | 32 | 33)) {
+                return FILE_BUSY.to_owned();
+            }
+            format!("Failed to replace file: {err}")
+        })?;
+        staged.disable_cleanup(true);
+    }
+    Ok(fingerprint)
+}
+
+fn verify_save_target(requested: &Path, target: &Path, expected: Option<&str>) -> Result<same_file::Handle, String> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        const SHARE_READ_AND_DELETE: u32 = 0x1 | 0x4;
+        options.share_mode(SHARE_READ_AND_DELETE);
+    }
+    let file = options.open(requested).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            return FILE_CHANGED_EXTERNALLY.to_owned();
+        }
+        #[cfg(windows)]
+        if matches!(err.raw_os_error(), Some(32 | 33)) {
+            return FILE_BUSY.to_owned();
+        }
+        err.to_string()
+    })?;
+    if let Some(expected) = expected {
+        let before = file.metadata().ok().as_ref().and_then(file_stamp);
+        let fingerprint = fingerprint_reader(&file)?;
+        let after = file.metadata().ok().as_ref().and_then(file_stamp);
+        if before != after || fingerprint != expected {
             return Err(FILE_CHANGED_EXTERNALLY.into());
         }
     }
-    let enc = encoding.unwrap_or_else(|| "utf-8".to_string());
-    let bytes = encode_text(&content, &enc);
-    let fingerprint = fingerprint_bytes(&bytes);
-    fs::write(&path, bytes).map_err(|e| format!("Failed to write file: {}", e))?;
-    Ok(fingerprint)
+    if requested.canonicalize().ok().as_deref() != Some(target) {
+        return Err(FILE_CHANGED_EXTERNALLY.into());
+    }
+    // The path may now refer to a different file with the same spelling.
+    // Reopen it and confirm its identity immediately before replacement.
+    let verified = same_file::Handle::from_file(file).map_err(|err| err.to_string())?;
+    let current = options.open(target).map_err(|err| {
+        if err.kind() == std::io::ErrorKind::NotFound {
+            FILE_CHANGED_EXTERNALLY.to_owned()
+        } else {
+            err.to_string()
+        }
+    })?;
+    if same_file::Handle::from_file(current).map_err(|err| err.to_string())? != verified {
+        return Err(FILE_CHANGED_EXTERNALLY.into());
+    }
+    Ok(verified)
 }
 
 #[tauri::command]
@@ -200,7 +409,7 @@ fn extract_file_args(argv: &[String], cwd: &str) -> Vec<String> {
     let mut files: Vec<String> = Vec::new();
 
     for raw in argv.iter().skip(1) {
-        let arg = raw.trim();
+        let arg = raw.as_str();
         if arg.is_empty() || arg.starts_with('-') {
             continue;
         }
@@ -280,10 +489,11 @@ pub fn rename_file(path: String, new_name: String) -> Result<String, String> {
     if new_name.trim().is_empty() {
         return Err("New name cannot be empty".into());
     }
+    let name = file_name_component(&new_name)?;
     let old = PathBuf::from(&path);
     let new_path = old
         .parent()
-        .map(|p| p.join(new_name.trim()))
+        .map(|p| p.join(name))
         .ok_or_else(|| "Invalid path".to_string())?;
     std::fs::rename(&old, &new_path).map_err(|e| format!("Failed to rename: {}", e))?;
     Ok(new_path.to_string_lossy().to_string())
@@ -313,31 +523,27 @@ pub fn delete_file(path: String) -> Result<(), String> {
         .map_err(|e| format!("Failed to move to the Recycle Bin: {}", e))
 }
 
-#[tauri::command]
+fn file_name_component(value: &str) -> Result<&str, String> {
+    let name = value.trim();
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) ||
+        (cfg!(windows) && (name.ends_with('.') || name.contains([':', '*', '?', '"', '<', '>', '|']))) {
+        return Err("Enter a single valid file or folder name".into());
+    }
+    Ok(name)
+}
+
+#[tauri::command(async)]
 pub fn create_file(parent: String, name: String) -> Result<String, String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err("Name cannot be empty".into());
-    }
-    let path = PathBuf::from(&parent).join(name);
-    if path.exists() {
-        return Err("A file or folder with that name already exists".into());
-    }
-    std::fs::write(&path, "").map_err(|e| format!("Failed to create file: {}", e))?;
+    let path = Path::new(&parent).join(file_name_component(&name)?);
+    fs::OpenOptions::new().write(true).create_new(true).open(&path)
+        .map_err(|e| format!("Failed to create file: {e}"))?;
     Ok(path.to_string_lossy().to_string())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_folder(parent: String, name: String) -> Result<String, String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err("Name cannot be empty".into());
-    }
-    let path = PathBuf::from(&parent).join(name);
-    if path.exists() {
-        return Err("A file or folder with that name already exists".into());
-    }
-    std::fs::create_dir(&path).map_err(|e| format!("Failed to create folder: {}", e))?;
+    let path = Path::new(&parent).join(file_name_component(&name)?);
+    fs::create_dir(&path).map_err(|e| format!("Failed to create folder: {e}"))?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -355,6 +561,8 @@ pub fn create_folder(parent: String, name: String) -> Result<String, String> {
 /// child wrote just before it died.
 pub struct RunEntry {
     child: Child,
+    #[cfg(windows)]
+    _job: Option<crate::pty::JobHandle>,
     /// Set once the child is known to be gone, by whichever thread notices
     /// first. The pump only flushes its tail after this.
     exited: Arc<AtomicBool>,
@@ -430,16 +638,15 @@ pub struct RunLines {
 /// thousands of main-thread messages per second to ~16.
 const OUTPUT_FLUSH_MS: u64 = 60;
 
-/// Ceiling on one batch, so a sudden burst cannot build a single huge event.
+/// Bound the transient display queue independently of the retained log.
 const OUTPUT_FLUSH_MAX_LINES: usize = 400;
+const OUTPUT_MAX_LINE_BYTES: u64 = 8 * 1024;
 
 #[derive(Clone, Serialize)]
 pub struct RunExit {
     pub id: String,
     pub code: Option<i32>,
-    /// The complete output of this run, on disk. `None` only when the log file
-    /// could not be created. The panel is capped, this is not, so the path is
-    /// how output survives a script that prints more than the panel can show.
+    /// Retained output of this run, on disk when a log could be created.
     pub log: Option<RunLogInfo>,
 }
 
@@ -564,6 +771,52 @@ pub fn detect_shells() -> Vec<ShellInfo> {
         .collect()
 }
 
+fn piped_output_encoding(label: Option<&str>) -> &'static encoding_rs::Encoding {
+    match label {
+        Some("gb18030") => encoding_rs::GB18030,
+        Some("shift_jis") => encoding_rs::SHIFT_JIS,
+        Some("windows-1252") => encoding_rs::WINDOWS_1252,
+        _ => encoding_rs::UTF_8,
+    }
+}
+
+fn read_output_line(
+    source: &mut impl BufRead,
+    decoder: &mut Option<encoding_rs::Decoder>,
+    bytes: &mut Vec<u8>,
+) -> std::io::Result<Option<String>> {
+    let Some(active_decoder) = decoder.as_mut() else {
+        return Ok(None);
+    };
+    loop {
+        bytes.clear();
+        // All selectable encodings are ASCII-compatible: LF cannot occur
+        // within a valid multibyte character. Decode before stripping CRLF.
+        let count = source.take(OUTPUT_MAX_LINE_BYTES).read_until(b'\n', bytes)?;
+        let last = count == 0;
+        let mut decoded = String::with_capacity(
+            active_decoder.max_utf8_buffer_length(count).expect("bounded pipe chunk"),
+        );
+        let (result, consumed, _) = active_decoder.decode_to_string(bytes, &mut decoded, last);
+        debug_assert_eq!(result, encoding_rs::CoderResult::InputEmpty);
+        debug_assert_eq!(consumed, count);
+        if last {
+            // EOF may emit a replacement character for an incomplete sequence.
+            // Return it once without calling the finished decoder again.
+            *decoder = None;
+            return Ok((!decoded.is_empty()).then_some(decoded));
+        }
+        if let Some(line) = decoded.strip_suffix('\n') {
+            let length = line.strip_suffix('\r').unwrap_or(line).len();
+            decoded.truncate(length);
+            return Ok(Some(decoded));
+        }
+        if !decoded.is_empty() {
+            return Ok(Some(decoded));
+        }
+    }
+}
+
 /// Drain one of the child's pipes, one line at a time, into `pending`.
 ///
 /// Generic over the reader so stdout and stderr — different concrete types —
@@ -576,21 +829,26 @@ pub fn detect_shells() -> Vec<ShellInfo> {
 fn collect_output<R: std::io::Read + Send + 'static>(
     source: R,
     stream: &'static str,
-    pending: Arc<Mutex<Vec<RunLine>>>,
+    pending: Arc<Mutex<VecDeque<RunLine>>>,
     readers_left: Arc<AtomicUsize>,
     log: Option<Arc<RunLog>>,
+    encoding: &'static encoding_rs::Encoding,
 ) {
     std::thread::spawn(move || {
-        for line in BufReader::new(source).lines() {
-            let Ok(line) = line else { break };
+        let mut source = BufReader::new(source);
+        let mut bytes = Vec::new();
+        let mut decoder = Some(encoding.new_decoder_with_bom_removal());
+        while let Ok(Some(line)) = read_output_line(&mut source, &mut decoder, &mut bytes) {
             if let Some(log) = &log {
                 log.write_line(&line);
             }
             match pending.lock() {
-                Ok(mut buffer) => buffer.push(RunLine {
-                    stream: stream.into(),
-                    line,
-                }),
+                Ok(mut buffer) => {
+                    if buffer.len() == OUTPUT_FLUSH_MAX_LINES {
+                        buffer.pop_front();
+                    }
+                    buffer.push_back(RunLine { stream: stream.into(), line });
+                }
                 Err(_) => break,
             }
         }
@@ -602,7 +860,7 @@ fn collect_output<R: std::io::Read + Send + 'static>(
 ///
 /// Draining under the lock is what keeps batches in order: only the pump thread
 /// calls this, and the lock decides which lines go into which batch.
-fn flush_output(app: &AppHandle, id: &str, pending: &Arc<Mutex<Vec<RunLine>>>) {
+fn flush_output(app: &AppHandle, id: &str, pending: &Arc<Mutex<VecDeque<RunLine>>>) {
     let lines = {
         let Ok(mut buffer) = pending.lock() else {
             return;
@@ -616,7 +874,7 @@ fn flush_output(app: &AppHandle, id: &str, pending: &Arc<Mutex<Vec<RunLine>>>) {
         "run://output",
         RunLines {
             id: id.to_string(),
-            lines,
+            lines: lines.into(),
         },
     );
 }
@@ -631,7 +889,10 @@ pub fn run_program(
     command: String,
     args: Vec<String>,
     cwd: Option<String>,
+    record_output: Option<bool>,
+    output_encoding: Option<String>,
 ) -> Result<(), String> {
+    let encoding = piped_output_encoding(output_encoding.as_deref());
     let dir = cwd.as_deref().filter(|d| !d.is_empty());
     if let Some(dir) = dir {
         if !Path::new(dir).is_dir() {
@@ -663,6 +924,8 @@ pub fn run_program(
         .spawn()
         .map_err(|e| format!("Failed to start {}: {}", command, e))?;
 
+    #[cfg(windows)]
+    let job = crate::pty::JobHandle::for_process(child.id());
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
     let stderr = child.stderr.take();
@@ -677,12 +940,16 @@ pub fn run_program(
         let state = app.state::<RunState>();
         let mut map = state.0.lock().unwrap();
         if map.contains_key(&id) {
+            let _ = child.kill();
+            let _ = child.wait();
             return Err("A process with this id is already running".into());
         }
         map.insert(
             id.clone(),
             RunEntry {
                 child,
+                #[cfg(windows)]
+                _job: job,
                 exited: process_exited.clone(),
                 pump_done: pump_done.clone(),
             },
@@ -695,25 +962,21 @@ pub fn run_program(
         map.insert(id.clone(), Arc::new(Mutex::new(stdin)));
     }
 
-    // The complete output goes to a file as well as to the panel. The panel is
-    // capped, so a script printing more lines than it can hold would otherwise
-    // have its early output become unreadable for good; the log has no cap.
-    // Registered by id so `stop_program` can hand the path back for a run it
-    // has to kill.
-    let log = app.state::<runlog::RunLogs>().start(&app, &id);
+    // Keep a separate, size-limited log so the display queue can drop old output.
+    let log = app.state::<runlog::RunLogs>().start(&app, &id, record_output == Some(true));
 
     // Output is funnelled through one buffer drained by one pump thread, so a
     // run costs at most one IPC event per OUTPUT_FLUSH_MS no matter how loudly
     // it prints. See RunLines for why that matters.
-    let pending: Arc<Mutex<Vec<RunLine>>> = Arc::new(Mutex::new(Vec::new()));
+    let pending: Arc<Mutex<VecDeque<RunLine>>> = Arc::new(Mutex::new(VecDeque::new()));
     let readers_left = Arc::new(AtomicUsize::new(0));
     if let Some(out) = stdout {
         readers_left.fetch_add(1, Ordering::SeqCst);
-        collect_output(out, "stdout", pending.clone(), readers_left.clone(), log.clone());
+        collect_output(out, "stdout", pending.clone(), readers_left.clone(), log.clone(), encoding);
     }
     if let Some(err) = stderr {
         readers_left.fetch_add(1, Ordering::SeqCst);
-        collect_output(err, "stderr", pending.clone(), readers_left.clone(), log.clone());
+        collect_output(err, "stderr", pending.clone(), readers_left.clone(), log.clone(), encoding);
     }
 
     {
@@ -839,6 +1102,8 @@ pub fn stop_program(app: AppHandle, id: String) -> Result<(), String> {
     if let Some(mut entry) = entry {
         let _ = entry.child.kill();
         let _ = entry.child.wait();
+        #[cfg(windows)]
+        drop(entry._job.take());
         // The watcher is not the thread ending this run, so nothing else would
         // tell the pump to stop. Raising `exited` first, then waiting for the
         // tail, is what makes the log below complete: the readers are still
@@ -864,11 +1129,33 @@ pub fn stop_program(app: AppHandle, id: String) -> Result<(), String> {
     Ok(())
 }
 
+pub fn stop_all_programs(app: &AppHandle) {
+    let state = app.state::<RunState>();
+    let entries = std::mem::take(&mut *state.0.lock().unwrap());
+    app.state::<StdinState>().0.lock().unwrap().clear();
+    let mut pending = Vec::with_capacity(entries.len());
+    for (id, mut entry) in entries {
+        #[cfg(windows)]
+        drop(entry._job.take());
+        let _ = entry.child.kill();
+        let _ = entry.child.wait();
+        entry.exited.store(true, Ordering::SeqCst);
+        pending.push((id, entry.pump_done));
+    }
+    let deadline = Instant::now() + Duration::from_millis(600);
+    for (id, done) in pending {
+        while !done.load(Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        runlog::finish(app, &id);
+    }
+}
+
 // Feed one line to a running program's standard input. This is what makes
 // `input()` / `scanf` / `readline` usable: without a connected stdin the child
 // inherits an invalid handle and dies with EOFError on its first read.
 #[tauri::command]
-pub fn write_stdin(app: AppHandle, id: String, data: String) -> Result<(), String> {
+pub async fn write_stdin(app: AppHandle, id: String, data: String) -> Result<(), String> {
     let state = app.state::<StdinState>();
     let handle = {
         let map = state
@@ -878,7 +1165,7 @@ pub fn write_stdin(app: AppHandle, id: String, data: String) -> Result<(), Strin
         map.get(&id).cloned()
     };
     match handle {
-        Some(stdin) => write_line(&stdin, &data),
+        Some(stdin) => file_io(move || write_line(&stdin, &data)).await,
         None => Err("The program is not waiting for input".into()),
     }
 }
@@ -906,89 +1193,229 @@ pub struct SearchFileResult {
 pub struct SearchResults {
     pub files: Vec<SearchFileResult>,
     pub files_truncated: bool,
+    pub files_incomplete: usize,
 }
 
 const SEARCH_MAX_FILES: usize = 100;
 const SEARCH_MAX_MATCHES_PER_FILE: usize = 200;
 
-fn search_file(path: &Path, query: &str, case_sensitive: bool) -> Option<SearchFileResult> {
-    let bytes = fs::read(path).ok()?;
-    let (content, _) = decode_bytes(&bytes);
-    // UTF-16 text contains zero bytes on disk, but not necessarily NUL characters.
-    if content.contains('\0') {
-        return None; // binary file
+const SEARCH_MAX_QUERY_BYTES: usize = 4096;
+const SEARCH_PREVIEW_RADIUS: usize = 80;
+// Case folding can match characters of different UTF-8 widths.
+const SEARCH_OVERLAP: usize = 4 * (SEARCH_MAX_QUERY_BYTES + 2 * SEARCH_PREVIEW_RADIUS);
+const SEARCH_WINDOW: usize = 2 * SEARCH_OVERLAP;
+
+fn search_pattern(query: &str, case_sensitive: bool) -> Result<regex::Regex, String> {
+    if query.len() > SEARCH_MAX_QUERY_BYTES {
+        return Err("SEARCH_QUERY_TOO_LONG".into());
     }
-    let needle = if case_sensitive {
-        query.to_string()
-    } else {
-        query.to_lowercase()
-    };
-    let mut matches = Vec::new();
-    let mut truncated = false;
-    for (i, raw) in content.lines().enumerate() {
-        let line = raw.trim_end_matches('\r');
-        let hay = if case_sensitive {
-            line.to_string()
-        } else {
-            line.to_lowercase()
-        };
-        if hay.contains(&needle) {
-            // Look for one extra match so exactly 200 lines is not called truncated.
-            if matches.len() == SEARCH_MAX_MATCHES_PER_FILE {
-                truncated = true;
+    regex::RegexBuilder::new(&regex::escape(query))
+        .case_insensitive(!case_sensitive)
+        .build()
+        .map_err(|err| err.to_string())
+}
+
+fn search_preview(line: &str, hit: regex::Match<'_>, clipped: bool, complete: bool) -> String {
+    let start = line[..hit.start()].char_indices().rev().nth(SEARCH_PREVIEW_RADIUS - 1)
+        .map_or(0, |(i, _)| i);
+    let end = line[hit.end()..].char_indices().nth(SEARCH_PREVIEW_RADIUS)
+        .map_or(line.len(), |(i, _)| hit.end() + i);
+    format!("{}{}{}", if clipped || start > 0 { "…" } else { "" }, &line[start..end],
+        if !complete || end < line.len() { "…" } else { "" })
+}
+
+#[derive(Default)]
+struct FileMatches {
+    matches: Vec<SearchMatch>,
+    truncated: bool,
+}
+
+enum ScanError {
+    Cancelled,
+    InvalidEncoding,
+    Binary,
+    Read,
+}
+
+fn scan_text(
+    input: &mut impl Read,
+    codec: &'static encoding_rs::Encoding,
+    pattern: &regex::Regex,
+    cancelled: &impl Fn() -> bool,
+) -> Result<FileMatches, ScanError> {
+    use encoding_rs::DecoderResult;
+    let mut decoder = codec.new_decoder_without_bom_handling();
+    let mut source = [0; 8192];
+    let mut output = [0; 8192];
+    let mut line = String::new();
+    let mut line_number = 1u32;
+    let mut clipped = false;
+    let mut matched = false;
+    let mut found = FileMatches::default();
+
+    loop {
+        if cancelled() {
+            return Err(ScanError::Cancelled);
+        }
+        let count = input.read(&mut source).map_err(|_| ScanError::Read)?;
+        let last = count == 0;
+        let mut remaining = &source[..count];
+        loop {
+            let (result, consumed, written) = decoder.decode_to_utf8_without_replacement(remaining, &mut output, last);
+            let chunk = std::str::from_utf8(&output[..written]).map_err(|_| ScanError::InvalidEncoding)?;
+            if chunk.contains('\0') {
+                return Err(ScanError::Binary);
+            }
+            if matches!(result, DecoderResult::Malformed(..)) {
+                return Err(ScanError::InvalidEncoding);
+            }
+            for part in chunk.split_inclusive('\n') {
+                let (text, complete) = part.strip_suffix('\n').map_or((part, false), |text| (text, true));
+                if !matched && !found.truncated {
+                    line.push_str(text);
+                    if complete || line.len() >= SEARCH_WINDOW {
+                        matched = record_line_match(&mut found, pattern, &line, line_number, clipped, complete);
+                        if !complete && !matched {
+                            // Keep full matches that cross the boundary, with
+                            // enough context on both sides for their preview.
+                            let mut start = line.len() - SEARCH_OVERLAP;
+                            while !line.is_char_boundary(start) {
+                                start -= 1;
+                            }
+                            line.drain(..start);
+                            clipped = true;
+                        }
+                    }
+                }
+                if complete {
+                    line.clear();
+                    line_number = line_number.saturating_add(1);
+                    clipped = false;
+                    matched = false;
+                }
+            }
+            remaining = &remaining[consumed..];
+            if result == DecoderResult::InputEmpty {
                 break;
             }
-            matches.push(SearchMatch {
-                line: (i + 1) as u32,
-                text: line.to_string(),
-            });
+        }
+        if last {
+            if !matched && !found.truncated && !line.is_empty() {
+                record_line_match(&mut found, pattern, &line, line_number, clipped, true);
+            }
+            return Ok(found);
         }
     }
-    if matches.is_empty() {
-        return None;
+}
+
+fn record_line_match(
+    result: &mut FileMatches,
+    pattern: &regex::Regex,
+    line: &str,
+    number: u32,
+    clipped: bool,
+    complete: bool,
+) -> bool {
+    let text = if complete { line.trim_end_matches('\r') } else { line };
+    let Some(hit) = pattern.find(text) else { return false };
+    // Wait if there is still too little text after the match, or if it
+    // could end in a CRLF delimiter split across decoder chunks.
+    if !complete && text.len() - hit.end() < 4 * SEARCH_PREVIEW_RADIUS {
+        return false;
     }
-    Some(SearchFileResult {
-        path: path.to_string_lossy().to_string(),
-        name: path
-            .file_name()
-            .map(|n| n.to_string_lossy().to_string())
-            .unwrap_or_default(),
-        matches,
-        truncated,
-    })
+    if result.matches.len() >= SEARCH_MAX_MATCHES_PER_FILE {
+        result.truncated = true;
+    } else {
+        result.matches.push(SearchMatch { line: number, text: search_preview(text, hit, clipped, complete) });
+    }
+    true
+}
+
+fn scan_file(path: &Path, pattern: &regex::Regex, cancelled: &impl Fn() -> bool) -> (Option<SearchFileResult>, bool) {
+    use std::io::{Seek, SeekFrom};
+    let scan = || -> Result<FileMatches, ScanError> {
+        if cancelled() {
+            return Err(ScanError::Cancelled);
+        }
+        let mut input = BufReader::new(fs::File::open(path).map_err(|_| ScanError::Read)?);
+        let (codec, bom_len) = match input.fill_buf().map_err(|_| ScanError::Read)? {
+            bytes if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) => (encoding_rs::UTF_8, 3),
+            bytes if bytes.starts_with(&[0xFF, 0xFE]) => (encoding_rs::UTF_16LE, 2),
+            bytes if bytes.starts_with(&[0xFE, 0xFF]) => (encoding_rs::UTF_16BE, 2),
+            _ => (encoding_rs::UTF_8, 0),
+        };
+        input.consume(bom_len);
+        match scan_text(&mut input, codec, pattern, cancelled) {
+            Err(ScanError::InvalidEncoding) if bom_len == 0 => {
+                input.seek(SeekFrom::Start(0)).map_err(|_| ScanError::Read)?;
+                scan_text(&mut input, encoding_rs::GBK, pattern, cancelled)
+            }
+            result => result,
+        }
+    };
+    let scan = match scan() {
+        Ok(scan) => scan,
+        Err(ScanError::Read | ScanError::InvalidEncoding) => return (None, true),
+        Err(ScanError::Cancelled | ScanError::Binary) => return (None, false),
+    };
+    let result = (!scan.matches.is_empty()).then(|| SearchFileResult {
+        path: path.to_string_lossy().into_owned(),
+        name: path.file_name().unwrap_or_default().to_string_lossy().into_owned(),
+        matches: scan.matches,
+        truncated: scan.truncated,
+    });
+    (result, false)
+}
+
+#[cfg(test)]
+fn search_file(path: &Path, query: &str, case_sensitive: bool) -> Option<SearchFileResult> {
+    scan_file(path, &search_pattern(query, case_sensitive).unwrap(), &|| false).0
 }
 
 fn search_dir(
     dir: &Path,
-    query: &str,
-    case_sensitive: bool,
+    pattern: &regex::Regex,
     results: &mut SearchResults,
     depth: usize,
+    cancelled: &impl Fn() -> bool,
 ) {
-    if depth > 32 || results.files_truncated {
+    if results.files_truncated || cancelled() {
+        return;
+    }
+    if depth > 32 {
+        results.files_incomplete += 1;
         return;
     }
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        if results.files_truncated {
+        Err(_) => {
+            results.files_incomplete += 1;
             return;
         }
+    };
+    for entry in entries {
+        if results.files_truncated || cancelled() {
+            return;
+        }
+        let Ok(entry) = entry else {
+            results.files_incomplete += 1;
+            continue;
+        };
         let path = entry.path();
         let name = entry.file_name().to_string_lossy().to_string();
-        let ft = match entry.file_type() {
-            Ok(t) => t,
-            Err(_) => continue,
+        let Ok(ft) = entry.file_type() else {
+            results.files_incomplete += 1;
+            continue;
         };
         if ft.is_dir() {
             if matches!(name.as_str(), ".git" | "node_modules" | "target" | "dist") {
                 continue;
             }
-            search_dir(&path, query, case_sensitive, results, depth + 1);
+            search_dir(&path, pattern, results, depth + 1, cancelled);
         } else if ft.is_file() {
-            if let Some(r) = search_file(&path, query, case_sensitive) {
+            let (result, incomplete) = scan_file(&path, pattern, cancelled);
+            results.files_incomplete += usize::from(incomplete);
+            if let Some(r) = result {
                 if results.files.len() == SEARCH_MAX_FILES {
                     results.files_truncated = true;
                     return;
@@ -999,23 +1426,69 @@ fn search_dir(
     }
 }
 
+// This search panel belongs to the single main window.
+static SEARCH_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[tauri::command]
-pub async fn search_in_files(root: String, query: String, case_sensitive: bool) -> SearchResults {
-    if query.trim().is_empty() {
-        return SearchResults::default();
+pub fn cancel_file_search(generation: u64) {
+    SEARCH_GENERATION.fetch_max(generation, Ordering::Relaxed);
+}
+
+#[tauri::command]
+pub async fn search_in_files(root: String, query: String, case_sensitive: bool, generation: u64) -> Result<SearchResults, String> {
+    if SEARCH_GENERATION.fetch_max(generation, Ordering::Relaxed) > generation || query.trim().is_empty() {
+        return Ok(SearchResults::default());
     }
     tauri::async_runtime::spawn_blocking(move || {
+        let pattern = search_pattern(&query, case_sensitive)?;
         let mut results = SearchResults::default();
-        search_dir(Path::new(&root), &query, case_sensitive, &mut results, 0);
-        results
+        search_dir(Path::new(&root), &pattern, &mut results, 0, &|| {
+            SEARCH_GENERATION.load(Ordering::Relaxed) != generation
+        });
+        Ok(results)
     })
     .await
-    .unwrap_or_default()
+    .map_err(|err| err.to_string())?
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn piped_output_decodes_legacy_text_and_keeps_multibyte_characters_across_chunks() {
+        for (label, text) in [("utf-8", "中文"), ("gb18030", "中文"), ("shift_jis", "日本語"), ("windows-1252", "café")] {
+            let encoding = piped_output_encoding(Some(label));
+            let (payload, _, errors) = encoding.encode(text);
+            assert!(!errors);
+            let mut bytes = vec![b'x'; OUTPUT_MAX_LINE_BYTES as usize - 1];
+            bytes.extend_from_slice(&payload);
+            bytes.extend_from_slice(b"\r\n\nend");
+            let mut input = std::io::Cursor::new(bytes);
+            let mut decoder = Some(encoding.new_decoder_with_bom_removal());
+            let mut scratch = Vec::new();
+            let first = read_output_line(&mut input, &mut decoder, &mut scratch).unwrap().unwrap();
+            let second = read_output_line(&mut input, &mut decoder, &mut scratch).unwrap().unwrap();
+            assert_eq!(format!("{first}{second}"), format!("{}{text}", "x".repeat(OUTPUT_MAX_LINE_BYTES as usize - 1)));
+            assert_eq!(read_output_line(&mut input, &mut decoder, &mut scratch).unwrap().as_deref(), Some(""));
+            assert_eq!(read_output_line(&mut input, &mut decoder, &mut scratch).unwrap().as_deref(), Some("end"));
+            assert!(read_output_line(&mut input, &mut decoder, &mut scratch).unwrap().is_none());
+        }
+    }
+
+    #[test]
+    fn piped_output_flushes_a_partial_character_once_at_eof() {
+        for (encoding, input) in [
+            (encoding_rs::UTF_8, &[0xE4, 0xB8][..]),
+            (encoding_rs::GB18030, &[0xD6][..]),
+        ] {
+            let mut source = std::io::Cursor::new(input);
+            let mut decoder = Some(encoding.new_decoder_with_bom_removal());
+            let mut scratch = Vec::new();
+            assert_eq!(read_output_line(&mut source, &mut decoder, &mut scratch).unwrap().as_deref(), Some("�"));
+            assert!(read_output_line(&mut source, &mut decoder, &mut scratch).unwrap().is_none());
+        }
+    }
 
     struct SearchFixture(PathBuf);
 
@@ -1055,7 +1528,7 @@ mod tests {
         let dir = SearchFixture::new("encodings");
         for encoding in ["utf-8", "utf-8-bom", "gbk", "utf-16le", "utf-16be"] {
             let path = dir.0.join(format!("{}.txt", encoding));
-            fs::write(&path, encode_text("first\r\n你好 hello\r\n", encoding)).unwrap();
+            fs::write(&path, encode_text("first\r\n你好 hello\r\n", encoding).unwrap()).unwrap();
             let result = search_file(&path, "你好", true).expect(encoding);
             assert_eq!(result.matches[0].line, 2);
             assert_eq!(result.matches[0].text, "你好 hello");
@@ -1063,8 +1536,36 @@ mod tests {
         let binary = dir.0.join("binary.dat");
         fs::write(&binary, b"hello\0world").unwrap();
         assert!(search_file(&binary, "hello", false).is_none());
-        fs::write(&binary, encode_text("hello\0world", "utf-16le")).unwrap();
+        fs::write(&binary, encode_text("hello\0world", "utf-16le").unwrap()).unwrap();
         assert!(search_file(&binary, "hello", false).is_none());
+    }
+
+    #[test]
+    fn streamed_search_matches_long_lines_with_correct_line_numbers() {
+        let dir = SearchFixture::new("long-lines");
+        let path = dir.0.join("large.txt");
+        let content = format!("{}目标{}\r\n{}目标{}\r\nlast 目标", "x".repeat(256 * 1024 - 3), "尾".repeat(1000), "前".repeat(1000), "后".repeat(1000));
+        for encoding in ["utf-8", "utf-8-bom", "utf-16le", "utf-16be", "gbk"] {
+            fs::write(&path, encode_text(&content, encoding).unwrap()).unwrap();
+            let (result, incomplete) = scan_file(&path, &search_pattern("目标", true).unwrap(), &|| false);
+            assert!(!incomplete, "{encoding}");
+            let matches = result.unwrap().matches;
+            assert_eq!(matches.iter().map(|hit| hit.line).collect::<Vec<_>>(), [1, 2, 3]);
+            assert!(matches[0].text.contains("目标"));
+            assert!(matches[0].text.starts_with('…') && matches[0].text.ends_with('…'));
+        }
+    }
+
+    #[test]
+    fn streamed_search_cancels_during_a_file() {
+        let mut source = std::io::Cursor::new(vec![b'x'; 32_768]);
+        let checks = std::cell::Cell::new(0);
+        let result = scan_text(&mut source, encoding_rs::UTF_8, &search_pattern("x", true).unwrap(), &|| {
+            checks.set(checks.get() + 1);
+            checks.get() > 1
+        });
+        assert!(matches!(result, Err(ScanError::Cancelled)));
+        assert_eq!(source.position(), 8192);
     }
 
     #[test]
@@ -1077,7 +1578,7 @@ mod tests {
         fs::write(dir.0.join(".config").join("settings.txt"), "hello").unwrap();
         fs::write(dir.0.join(".git").join("ignored.txt"), "hello").unwrap();
         let mut results = SearchResults::default();
-        search_dir(&dir.0, "hello", true, &mut results, 0);
+        search_dir(&dir.0, &search_pattern("hello", true).unwrap(), &mut results, 0, &|| false);
         assert_eq!(results.files.len(), 3);
     }
 
@@ -1105,13 +1606,13 @@ mod tests {
         }
         fs::write(dir.0.join("no-match.txt"), "other\n").unwrap();
         let mut exact = SearchResults::default();
-        search_dir(&dir.0, "hello", true, &mut exact, 0);
+        search_dir(&dir.0, &search_pattern("hello", true).unwrap(), &mut exact, 0, &|| false);
         assert_eq!(exact.files.len(), SEARCH_MAX_FILES);
         assert!(!exact.files_truncated);
 
         fs::write(dir.0.join("nested").join("extra.txt"), "hello\n").unwrap();
         let mut extra = SearchResults::default();
-        search_dir(&dir.0, "hello", true, &mut extra, 0);
+        search_dir(&dir.0, &search_pattern("hello", true).unwrap(), &mut extra, 0, &|| false);
         assert_eq!(extra.files.len(), SEARCH_MAX_FILES);
         assert!(extra.files_truncated);
         let json = serde_json::to_value(extra).unwrap();
@@ -1128,6 +1629,24 @@ mod tests {
     }
 
     #[test]
+    fn revision_uses_metadata_fast_path_without_weakening_the_save_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("example.txt");
+        fs::write(&path, b"first").unwrap();
+        let initial = check_revision(&path, None).unwrap();
+        let stamp = initial.stamp.as_deref().expect("test file metadata");
+        assert!(check_revision(&path, Some(stamp)).unwrap().unchanged);
+        fs::write(&path, b"second").unwrap();
+        let changed = check_revision(&path, Some(stamp)).unwrap();
+        assert!(!changed.unchanged);
+        assert_ne!(changed.fingerprint, initial.fingerprint);
+        // A full check is still available for watch events and conditional saves.
+        assert_eq!(check_revision(&path, None).unwrap().fingerprint, changed.fingerprint);
+        fs::remove_file(&path).unwrap();
+        assert!(check_revision(&path, Some(stamp)).unwrap().fingerprint.is_none());
+    }
+
+    #[test]
     fn conditional_write_does_not_overwrite_external_change() {
         let path = std::env::temp_dir().join(format!(
             "betternotepad-conditional-write-{}.txt",
@@ -1135,52 +1654,93 @@ mod tests {
         ));
         let path_string = path.to_string_lossy().into_owned();
         fs::write(&path, b"aaaa").unwrap();
-        let original = read_file(path_string.clone()).unwrap().fingerprint;
+        let original = read_file_impl(path_string.clone()).unwrap().fingerprint;
         assert_eq!(
-            file_fingerprint(path_string.clone()).unwrap(),
+            fingerprint_path(&path).unwrap(),
             Some(original.clone())
         );
 
         fs::write(&path, b"bbbb").unwrap();
-        let result = write_file(
+        let result = write_file_impl(
             path_string.clone(),
             "cccc".into(),
             Some("utf-8".into()),
             Some(original),
+            None,
         );
         assert_eq!(result.unwrap_err(), FILE_CHANGED_EXTERNALLY);
         assert_eq!(fs::read(&path).unwrap(), b"bbbb");
 
-        let current = file_fingerprint(path_string.clone()).unwrap().unwrap();
-        let written = write_file(path_string.clone(), "cccc".into(), None, Some(current)).unwrap();
-        assert_eq!(file_fingerprint(path_string.clone()).unwrap(), Some(written.clone()));
+        let current = fingerprint_path(&path).unwrap().unwrap();
+        let written = write_file_impl(path_string.clone(), "cccc".into(), None, Some(current), None).unwrap();
+        assert_eq!(fingerprint_path(&path).unwrap(), Some(written.clone()));
         assert_eq!(fs::read(&path).unwrap(), b"cccc");
-        fs::remove_file(path).unwrap();
-        assert_eq!(file_fingerprint(path_string.clone()).unwrap(), None);
+        fs::remove_file(&path).unwrap();
+        assert_eq!(fingerprint_path(&path).unwrap(), None);
         assert_eq!(
-            write_file(path_string, "dddd".into(), None, Some(written)).unwrap_err(),
+            write_file_impl(path_string, "dddd".into(), None, Some(written), None).unwrap_err(),
             FILE_CHANGED_EXTERNALLY
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn conditional_save_rejects_an_open_writer_without_changing_the_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("busy.txt");
+        fs::write(&path, b"original").unwrap();
+        let name = path.to_string_lossy().into_owned();
+        let original = fingerprint_bytes(b"original");
+        let writer = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        assert_eq!(write_file_impl(name.clone(), "new".into(), None, Some(original.clone()), None).unwrap_err(), FILE_BUSY);
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        drop(writer);
+        write_file_impl(name, "new".into(), None, Some(original), None).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"new");
+    }
+
+    #[test]
+    fn editor_rejects_oversized_files_before_allocating_their_contents() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.txt");
+        fs::File::create(&path).unwrap().set_len(MAX_EDITOR_FILE_BYTES + 1).unwrap();
+        assert_eq!(read_file_impl(path.to_string_lossy().into_owned()).err().as_deref(), Some("FILE_TOO_LARGE"));
+    }
+
+    #[test]
+    fn save_rejects_lossy_encoding_and_existing_new_destination() {
+        let dir = SearchFixture::new("save-conflicts");
+        let path = dir.0.join("example.txt");
+        let name = path.to_string_lossy().into_owned();
+        fs::write(&path, b"original").unwrap();
+        assert!(write_file_impl(name.clone(), "🙂".into(), Some("gbk".into()), None, None)
+            .unwrap_err().contains("UNREPRESENTABLE_TEXT"));
+        assert_eq!(write_file_impl(name, "new".into(), None, None, Some(true)).unwrap_err(), FILE_CHANGED_EXTERNALLY);
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert!(create_file(dir.0.to_string_lossy().into_owned(), "example.txt".into()).is_err());
+        assert_eq!(fs::read(&path).unwrap(), b"original");
+        assert!(decode_bytes(&[0xEF, 0xBB, 0xBF, 0xFF]).is_err());
     }
 
     #[test]
     fn gbk_round_trip() {
         // "你好" in GBK: 你 = C4 E3, 好 = BA C3
         let bytes = [0xC4u8, 0xE3, 0xBA, 0xC3];
-        let (text, enc) = decode_bytes(&bytes);
+        let (text, enc) = decode_bytes(&bytes).unwrap();
         assert_eq!(text, "你好");
         assert_eq!(enc, "gbk");
-        assert_eq!(encode_text(&text, &enc), bytes);
+        assert_eq!(encode_text(&text, &enc).unwrap(), bytes);
     }
 
     #[test]
     fn utf8_bom_round_trip() {
         let mut bytes = vec![0xEF, 0xBB, 0xBF];
         bytes.extend_from_slice("你好".as_bytes());
-        let (text, enc) = decode_bytes(&bytes);
+        let (text, enc) = decode_bytes(&bytes).unwrap();
         assert_eq!(text, "你好");
         assert_eq!(enc, "utf-8-bom");
-        assert_eq!(encode_text(&text, &enc), bytes);
+        assert_eq!(encode_text(&text, &enc).unwrap(), bytes);
     }
 
     #[test]
@@ -1189,10 +1749,10 @@ mod tests {
         for unit in "你好".encode_utf16() {
             bytes.extend_from_slice(&unit.to_le_bytes());
         }
-        let (text, enc) = decode_bytes(&bytes);
+        let (text, enc) = decode_bytes(&bytes).unwrap();
         assert_eq!(text, "你好");
         assert_eq!(enc, "utf-16le");
-        assert_eq!(encode_text(&text, &enc), bytes);
+        assert_eq!(encode_text(&text, &enc).unwrap(), bytes);
     }
 
     #[test]
@@ -1201,15 +1761,15 @@ mod tests {
         for unit in "你好".encode_utf16() {
             bytes.extend_from_slice(&unit.to_be_bytes());
         }
-        let (text, enc) = decode_bytes(&bytes);
+        let (text, enc) = decode_bytes(&bytes).unwrap();
         assert_eq!(text, "你好");
         assert_eq!(enc, "utf-16be");
-        assert_eq!(encode_text(&text, &enc), bytes);
+        assert_eq!(encode_text(&text, &enc).unwrap(), bytes);
     }
 
     #[test]
     fn plain_utf8_is_detected() {
-        let (text, enc) = decode_bytes("plain text".as_bytes());
+        let (text, enc) = decode_bytes("plain text".as_bytes()).unwrap();
         assert_eq!(text, "plain text");
         assert_eq!(enc, "utf-8");
     }
@@ -1224,7 +1784,7 @@ mod tests {
         std::fs::write(dir.join("skip.bin"), "abc\x00def").unwrap(); // binary -> skipped
 
         let mut results = SearchResults::default();
-        search_dir(&dir, "hello", false, &mut results, 0);
+        search_dir(&dir, &search_pattern("hello", false).unwrap(), &mut results, 0, &|| false);
 
         assert_eq!(results.files.len(), 2, "binary file must be skipped");
         let a = results.files.iter().find(|r| r.name == "a.txt").unwrap();
@@ -1246,11 +1806,12 @@ mod tests {
         std::fs::write(dir.join("x.txt"), "Hello\n").unwrap();
 
         let mut insensitive = SearchResults::default();
-        search_dir(&dir, "hello", false, &mut insensitive, 0);
+        search_dir(&dir, &search_pattern("hello", false).unwrap(), &mut insensitive, 0, &|| false);
         assert_eq!(insensitive.files.len(), 1);
 
         let mut sensitive = SearchResults::default();
-        search_dir(&dir, "hello", true, &mut sensitive, 0);
+        let pattern = search_pattern("hello", true).unwrap();
+        search_dir(&dir, &pattern, &mut sensitive, 0, &|| false);
         assert!(sensitive.files.is_empty());
 
         let _ = std::fs::remove_dir_all(&dir);

@@ -21,7 +21,7 @@ import AboutDialog from "./components/AboutDialog";
 import GlobalSearchPanel from "./components/GlobalSearchPanel";
 import MarkdownPreview from "./components/MarkdownPreview";
 import ResizeHandle from "./components/ResizeHandle";
-import { useTabs, isPathAffected, isTabUnsaved, type Tab } from "./hooks/useTabs";
+import { useTabs, isPathAffected, isTabUnsaved, type DesktopSession, type Tab } from "./hooks/useTabs";
 import { useFileExplorer, type FileNode } from "./hooks/useFileExplorer";
 import { useEditorState } from "./hooks/useEditorState";
 import { useTheme } from "./hooks/useTheme";
@@ -106,7 +106,7 @@ function dirName(p: string): string {
   return idx <= 0 ? "" : p.slice(0, idx);
 }
 
-function App() {
+function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
   const { settings: editorSettings, patch: setEditorSettings } = useEditorSettings();
 
   // Sync the i18n layer before children render, so `t()` is already correct on
@@ -118,6 +118,10 @@ function App() {
     activeTabId,
     activeTab,
     unsavedTabs,
+    fileNotice,
+    dismissFileNotice,
+    sessionError,
+    sessionLoadFailed,
     activateTab,
     moveTab,
     setActiveContent,
@@ -137,6 +141,7 @@ function App() {
     overwriteExternalChange,
     persistSessionNow,
     discardUnsavedFromSession,
+    resumeSessionBackup,
     requestClose,
     closeTab,
     canReopenClosedTab,
@@ -146,7 +151,7 @@ function App() {
     pendingClose,
     cancelPendingClose,
     confirmPendingClose,
-  } = useTabs({ defaultEol: editorSettings.defaultEol });
+  } = useTabs({ defaultEol: editorSettings.defaultEol, desktopSession });
 
   const {
     cursorLine,
@@ -159,7 +164,7 @@ function App() {
 
   const { theme, cycle: cycleTheme } = useTheme();
   const mascot = useMascot();
-  const runner = useRunner();
+  const runner = useRunner(editorSettings.recordRunOutput, editorSettings.runOutputEncoding);
 
   const [outputOpen, setOutputOpen] = useState(false);
   const [outputMounted, setOutputMounted] = useState(false);
@@ -189,6 +194,10 @@ function App() {
       await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
       if (tabsRef.current.some(isTabUnsaved)) return false;
     }
+    if (!await persistSessionNow()) {
+      alert(t("file.sessionUpdateBlocked"));
+      return false;
+    }
     if (runner.running || runner.shell) {
       if (!await ask(t("about.updateTerminalPrompt"), {
         title: t("about.updates"), kind: "warning",
@@ -199,8 +208,9 @@ function App() {
     await runner.closeShell();
     await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
     if (tabsRef.current.some(isTabUnsaved)) return false;
-    persistSessionNow();
-    return true;
+    const backedUp = await persistSessionNow();
+    if (!backedUp) alert(t("file.sessionUpdateBlocked"));
+    return backedUp && !tabsRef.current.some(isTabUnsaved);
   });
 
   useEffect(() => {
@@ -336,7 +346,7 @@ function App() {
   const [showReplace, setShowReplace] = useState(false);
   const [globalSearchOpen, setGlobalSearchOpen] = useState(false);
   const [previewOpen, setPreviewOpen] = useState(false);
-  const isMarkdown = detectLanguage(activeTab.fileName) === "markdown";
+  const isMarkdown = !activeTab.needsDiskLoad && detectLanguage(activeTab.fileName) === "markdown";
   const revealLineRef = useRef<{ path: string; line: number } | null>(null);
 
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
@@ -390,26 +400,14 @@ function App() {
     setOutputHeight((h) => clamp(h - delta, 60, 640));
   }, []);
 
-  // stdin history for the output panel, shared across runs so an answer typed
-  // for one program is still recallable in the next one. Capped because it is
-  // persisted to localStorage.
-  const [inputHistory, setInputHistory] = useState<string[]>(() => {
-    try {
-      const raw = localStorage.getItem("betternotepad.inputHistory");
-      const parsed = raw ? JSON.parse(raw) : [];
-      return Array.isArray(parsed) ? parsed.filter((x) => typeof x === "string") : [];
-    } catch {
-      return [];
-    }
-  });
+  // Remember only short answers, in memory and only when opted in.
+  const [inputHistory, setInputHistory] = useState<string[]>([]);
+  const clearInputHistory = useCallback(() => setInputHistory([]), []);
   useEffect(() => {
-    try {
-      localStorage.setItem("betternotepad.inputHistory", JSON.stringify(inputHistory));
-    } catch {
-      // ignore
-    }
-  }, [inputHistory]);
+    if (!editorSettings.rememberStdin) clearInputHistory();
+  }, [editorSettings.rememberStdin, clearInputHistory]);
   const rememberInput = useCallback((text: string) => {
+    if (!editorSettings.rememberStdin || !text.trim() || text.length > 4096) return;
     setInputHistory((prev) => {
       // Consecutive duplicates are noise (holding Enter, retrying the same
       // answer); keep the list short and useful.
@@ -417,7 +415,7 @@ function App() {
       const next = [...prev, text];
       return next.length > 100 ? next.slice(next.length - 100) : next;
     });
-  }, []);
+  }, [editorSettings.rememberStdin]);
 
   const [wrap, setWrap] = useState<boolean>(() => {
     try {
@@ -439,6 +437,8 @@ function App() {
   }, [isMarkdown]);
   const [isDragOver, setIsDragOver] = useState(false);
   const [appClosingTabs, setAppClosingTabs] = useState<Tab[] | null>(null);
+  const [closeSaving, setCloseSaving] = useState(false);
+  const closeSavingRef = useRef(false);
   const editorRef = useRef<EditorHandle>(null);
 
   const closeSearch = useCallback(() => {
@@ -517,6 +517,7 @@ function App() {
       return;
     }
     const tab = activeTab;
+    if (tab.needsDiskLoad) return;
     // The file must exist on disk: save (or save-as) first, then run it.
     let filePath = tab.filePath;
     if (!filePath || tab.modified) {
@@ -612,15 +613,19 @@ function App() {
   }, [setEditorSettings, runner.closeShell]);
 
   const handleOpenSearchResult = useCallback((path: string, line: number) => {
+    if (isPathAffected(activeTab.filePath, path)) {
+      editorRef.current?.goToLine(line);
+      return;
+    }
     revealLineRef.current = { path, line };
-    openPaths([path]);
-  }, [openPaths]);
+    void openPaths([path]);
+  }, [activeTab.filePath, openPaths]);
 
   // After a cross-file-search result opens a file (or activates an existing
   // tab), move the caret to the matching line once the editor is mounted.
   useEffect(() => {
     const target = revealLineRef.current;
-    if (!target || activeTab.filePath !== target.path) return;
+    if (!target || !isPathAffected(activeTab.filePath, target.path)) return;
     const raf = requestAnimationFrame(() => {
       editorRef.current?.goToLine(target.line);
       revealLineRef.current = null;
@@ -638,6 +643,7 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (closeSavingRef.current || appClosingTabs) return;
       if (e.target instanceof Element && e.target.closest("[data-terminal-output]")) {
         const key = e.key.toLowerCase();
         const zoomKey =
@@ -719,7 +725,7 @@ function App() {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [newTab, openTab, saveActive, saveActiveAs, openSearch, closeSearch, requestClose, activeTabId, cycleTabs, handleZoomIn, handleZoomOut, handleRun, showSearch]);
+  }, [newTab, openTab, saveActive, saveActiveAs, openSearch, closeSearch, requestClose, activeTabId, cycleTabs, handleZoomIn, handleZoomOut, handleRun, showSearch, appClosingTabs]);
 
   useEffect(() => {
     const hasFiles = (e: DragEvent) =>
@@ -784,40 +790,82 @@ function App() {
 
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
+    let disposed = false;
     let unlisten: (() => void) | undefined;
     getCurrentWindow()
-      .onCloseRequested((event) => {
-        if (updater.busyRef.current) {
-          event.preventDefault();
+      .onCloseRequested(async (event) => {
+        event.preventDefault();
+        if (updater.busyRef.current || closeSavingRef.current) return;
+        if (unsavedTabsRef.current.length) {
+          setAppClosingTabs(unsavedTabsRef.current);
           return;
         }
-        if (unsavedTabsRef.current.length === 0) return;
-        event.preventDefault();
-        setAppClosingTabs(unsavedTabsRef.current);
+        closeSavingRef.current = true;
+        setCloseSaving(true);
+        try {
+          const backedUp = await persistSessionNow();
+          if (!backedUp && !await ask(t("file.sessionClosePrompt"), { kind: "warning", cancelLabel: t("confirm.cancel") })) return;
+          const remaining = tabsRef.current.filter(isTabUnsaved);
+          if (remaining.length) setAppClosingTabs(remaining);
+          else await getCurrentWindow().destroy();
+        } finally {
+          closeSavingRef.current = false;
+          setCloseSaving(false);
+        }
       })
       .then((fn) => {
-        unlisten = fn;
+        if (disposed) fn();
+        else unlisten = fn;
       })
       .catch(() => {});
     return () => {
+      disposed = true;
       unlisten?.();
     };
-  }, []);
+  }, [persistSessionNow, updater.busyRef]);
 
   const handleAppCloseSaveAll = useCallback(async () => {
-    if (!appClosingTabs) return;
-    for (const tab of appClosingTabs) {
-      const saved = await saveTabData(tab);
-      if (!saved) return; // a Save-As was cancelled/failed -> stay in the window
+    if (!appClosingTabs || closeSavingRef.current) return;
+    closeSavingRef.current = true;
+    setCloseSaving(true);
+    try {
+      const saved = await saveAll();
+      await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+      const remaining = tabsRef.current.filter(isTabUnsaved);
+      if (!saved || remaining.length) {
+        setAppClosingTabs(remaining.length ? remaining : null);
+        return;
+      }
+      const backedUp = await persistSessionNow();
+      if (!backedUp && !await ask(t("file.sessionClosePrompt"), { kind: "warning", cancelLabel: t("confirm.cancel") })) {
+        setAppClosingTabs(null);
+        return;
+      }
+      const newlyEdited = tabsRef.current.filter(isTabUnsaved);
+      if (newlyEdited.length) setAppClosingTabs(newlyEdited);
+      else if ("__TAURI_INTERNALS__" in window) await getCurrentWindow().destroy();
+    } finally {
+      closeSavingRef.current = false;
+      setCloseSaving(false);
     }
-    persistSessionNow(); // record the now-saved state so a restart restores cleanly
-    if ("__TAURI_INTERNALS__" in window) getCurrentWindow().destroy();
-  }, [appClosingTabs, saveTabData, persistSessionNow]);
+  }, [appClosingTabs, saveAll, persistSessionNow]);
 
-  const handleAppCloseDiscardAll = useCallback(() => {
-    discardUnsavedFromSession(); // don't resurrect content the user explicitly discarded
-    if ("__TAURI_INTERNALS__" in window) getCurrentWindow().destroy();
-  }, [discardUnsavedFromSession]);
+  const handleAppCloseDiscardAll = useCallback(async () => {
+    if (closeSavingRef.current) return;
+    closeSavingRef.current = true;
+    setCloseSaving(true);
+    try {
+      if (!await discardUnsavedFromSession()) {
+        alert(t("file.sessionDiscardFailed"));
+        return;
+      }
+      if ("__TAURI_INTERNALS__" in window) await getCurrentWindow().destroy();
+    } finally {
+      resumeSessionBackup();
+      closeSavingRef.current = false;
+      setCloseSaving(false);
+    }
+  }, [discardUnsavedFromSession, resumeSessionBackup]);
 
   const handleAppCloseCancel = useCallback(() => {
     setAppClosingTabs(null);
@@ -825,7 +873,7 @@ function App() {
 
   return (
     <>
-    <div inert={updater.busy} className="h-screen bg-surface text-ink flex flex-col select-none overflow-hidden">
+    <div inert={updater.busy || closeSaving} className="h-screen bg-surface text-ink flex flex-col select-none overflow-hidden">
       <Toolbar
         onNew={newTab}
         onOpen={openTab}
@@ -875,6 +923,34 @@ function App() {
           onToggleReplace={() => setShowReplace((prev) => !prev)}
         />
       )}
+      {(fileNotice || explorer.notice || sessionError) && (
+        <div className="px-4 py-2 bg-panel border-b border-line text-sm text-ink space-y-1">
+          {fileNotice && (
+            <div role="alert" className="flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                {fileNotice.message}
+                {fileNotice.details && <div className="text-sub whitespace-pre-wrap break-all max-h-28 overflow-auto">{fileNotice.details}</div>}
+              </div>
+              <button className="text-sub hover:text-ink" onClick={dismissFileNotice} aria-label={t("common.closeEsc")}>×</button>
+            </div>
+          )}
+          {explorer.notice && (
+            <div role="alert" className="flex items-start gap-3">
+              <div className="flex-1 min-w-0">
+                {explorer.notice.message}
+                <div className="text-sub whitespace-pre-wrap break-all max-h-28 overflow-auto">{explorer.notice.details}</div>
+              </div>
+              <button className="text-sub hover:text-ink" onClick={explorer.dismissNotice} aria-label={t("common.closeEsc")}>×</button>
+            </div>
+          )}
+          {sessionError && (
+            <div role="alert" className="flex items-center justify-between gap-3">
+              <span>{sessionLoadFailed ? t("file.sessionLoadFailed") : sessionError === "limit" ? t("file.sessionTooLarge") : t("file.sessionFailed")}</span>
+              {!sessionLoadFailed && <button className="text-accent underline shrink-0" onClick={() => { void persistSessionNow(); }}>{t("file.retrySession")}</button>}
+            </div>
+          )}
+        </div>
+      )}
       {globalSearchOpen && (
         <GlobalSearchPanel
           root={explorer.root?.path ?? null}
@@ -913,7 +989,7 @@ function App() {
           </button>
         )}
         <div className="flex-1 overflow-hidden p-3 flex flex-col gap-2">
-          {activeTab.externalChange && (
+          {activeTab.externalChange && !activeTab.needsDiskLoad && (
             <div role="status" className="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-line bg-elevated px-3 py-2 text-sm shadow-card">
               <span className="text-warn" aria-hidden="true">●</span>
               <div className="min-w-0 flex-1">
@@ -954,7 +1030,14 @@ function App() {
               className="relative rounded-2xl border border-line shadow-card overflow-hidden bg-editor"
               style={{ flex: previewOpen && isMarkdown ? editorRatio : 1, minWidth: 0 }}
             >
-              <Editor
+              {activeTab.needsDiskLoad ? (
+                <div role="status" className="flex flex-col items-start gap-3 p-4 text-sm text-sub">
+                  <span>{activeTab.diskLoadError ?? (activeTab.externalChange === "missing" ? t("external.missingTitle", { name: activeTab.fileName }) : t("file.loadingFromDisk"))}</span>
+                  <button onClick={() => void reloadTabFromDisk(activeTab.id)} className="rounded-md border border-line px-2.5 py-1 hover:bg-hover">
+                    {t("external.retry")}
+                  </button>
+                </div>
+              ) : <Editor
                 key={`${activeTab.id}:${activeTab.reloadRevision ?? 0}`}
                 ref={editorRef}
                 tabId={activeTab.id}
@@ -971,11 +1054,11 @@ function App() {
                 language={detectLanguage(activeTab.fileName)}
                 wrap={wrap}
                 bracketMatching={editorSettings.bracketMatching}
-              />
+              />}
               {isMarkdown && (
                 <button
                   onClick={() => setPreviewOpen((o) => !o)}
-                  title={previewOpen ? "Hide Markdown preview" : "Show Markdown preview"}
+                  title={t(previewOpen ? "preview.hide" : "preview.show")}
                   className={`absolute top-2 right-6 z-10 flex items-center justify-center w-7 h-7 rounded-md shadow-card transition-colors ${
                     previewOpen ? "accent-chip" : "bg-elevated border border-line text-sub hover:text-ink hover:bg-hover"
                   }`}
@@ -1027,7 +1110,7 @@ function App() {
           onSetTerminalMode={handleSetTerminalMode}
           fontSize={editorSettings.fontSize}
           fontFamily={editorSettings.fontFamily}
-          inputHistory={inputHistory}
+          inputHistory={editorSettings.rememberStdin ? inputHistory : []}
           onRememberInput={rememberInput}
           shell={runner.shell}
           onOpenShell={handleOpenShell}
@@ -1077,6 +1160,7 @@ function App() {
       {appClosingTabs && (
         <ConfirmAppCloseDialog
           unsavedTabs={appClosingTabs}
+          saving={closeSaving}
           onSaveAll={handleAppCloseSaveAll}
           onDiscardAll={handleAppCloseDiscardAll}
           onCancel={handleAppCloseCancel}
@@ -1099,6 +1183,7 @@ function App() {
           shells={runner.shells}
           editorSettings={editorSettings}
           onSetEditor={setEditorSettings}
+          onClearInputHistory={clearInputHistory}
           onClose={() => setSettingsOpen(false)}
           updater={updater}
           mascot={mascot}

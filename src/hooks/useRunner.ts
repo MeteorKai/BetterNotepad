@@ -9,6 +9,7 @@ export interface InterpreterConfig {
   args: string[];
   enabled: boolean;
   available: boolean;
+  manual?: boolean;
 }
 
 export interface RunLine {
@@ -33,9 +34,7 @@ export interface RunExit {
   id: string;
   code: number | null;
   /**
-   * Where this run's complete output was written, if anywhere. The panel is
-   * capped and the terminal's scrollback is capped; this file is not, so it is
-   * what makes the early output of a chatty script reachable again.
+   * Where this run’s retained output was written, if anywhere.
    */
   log: RunLogInfo | null;
 }
@@ -45,6 +44,7 @@ export interface RunLogInfo {
   path: string;
   lines: number;
   bytes: number;
+  truncated: boolean;
 }
 
 /** An interactive shell this machine can start, as reported by the backend. */
@@ -198,11 +198,10 @@ function runPrefix(kind: string): string {
   return kind === "powershell" ? "& " : "";
 }
 
-/** How `kind` sequences two commands on one line. */
-function chain(kind: string): string {
-  // PowerShell 5.1 has no `&&`; `;` runs the second command either way, which is
-  // the best available without sniffing the version.
-  return kind === "powershell" ? "; " : " && ";
+function withWorkingDirectory(dir: string, kind: string, invocation: string): string {
+  const change = cdCommand(dir, kind);
+  if (kind === "powershell") return `try { ${change} -ErrorAction Stop; ${invocation} } catch { Write-Error $_ }`;
+  return change + " && " + invocation;
 }
 
 function loadConfig(): InterpreterConfig[] {
@@ -218,7 +217,7 @@ function loadConfig(): InterpreterConfig[] {
   return [];
 }
 
-export function useRunner() {
+export function useRunner(recordOutput = false, outputEncoding = "utf-8") {
   const [config, setConfig] = useState<InterpreterConfig[]>(loadConfig);
   const [output, setOutput] = useState<RunLine[]>([]);
   const [running, setRunning] = useState(false);
@@ -254,11 +253,8 @@ export function useRunner() {
   // and the tag is what stops it being replayed into a different shell.
   const shellSnapshotRef = useRef<{ id: string; screen: string } | null>(null);
   const shellSizeRef = useRef({ cols: DEFAULT_COLS, rows: DEFAULT_ROWS });
-  // Which shell `shellIdRef` is running, and the directory it is last known to
-  // be in. The kind decides the syntax of an injected command line; the
-  // directory decides whether one has to be injected at all.
+  // The shell kind determines how an injected command line is quoted.
   const shellKindRef = useRef<string | null>(null);
-  const shellCwdRef = useRef<string | null>(null);
   // Command lines waiting for a shell that has just been spawned to come up, in
   // the order they were asked for. A queue rather than a single slot because two
   // callers can ask for a session at once — see `openingShellRef`.
@@ -384,7 +380,9 @@ export function useRunner() {
 
   const setInterpreter = useCallback((language: string, patch: Partial<InterpreterConfig>) => {
     setConfig((prev) =>
-      prev.map((c) => (c.language === language ? { ...c, ...patch } : c))
+      prev.map((c) => c.language === language
+        ? { ...c, ...patch, manual: c.manual !== false || patch.command !== undefined || patch.args !== undefined }
+        : c)
     );
   }, []);
 
@@ -396,17 +394,9 @@ export function useRunner() {
         const map = new Map(prev.map((c) => [c.language, c]));
         for (const d of detected) {
           const existing = map.get(d.language);
-          if (d.available) {
-            // Refresh the resolved PATH location; keep the user's enable state.
-            map.set(d.language, {
-              ...(existing ?? { language: d.language, args: d.args, enabled: true, available: true }),
-              command: d.command,
-              args: d.args,
-            });
-          } else if (!existing) {
-            // Not found on PATH: add a disabled entry for manual configuration.
-            map.set(d.language, { ...d, enabled: false });
-          }
+          // Older versions did not track ownership, so preserve their saved choices.
+          if (existing && existing.manual !== false) continue;
+          map.set(d.language, { ...d, enabled: existing?.enabled ?? d.available, manual: false });
         }
         return Array.from(map.values());
       });
@@ -623,7 +613,6 @@ export function useRunner() {
     shellBannerRef.current = null;
     shellSnapshotRef.current = null;
     shellKindRef.current = null;
-    shellCwdRef.current = null;
     pendingInjectRef.current = [];
     // Released here rather than only by the bring-up that set it: this is also
     // the close-it-by-hand path, and a session the user has just thrown away is
@@ -703,7 +692,6 @@ export function useRunner() {
         if (msg.kind === "exit") {
           shellIdRef.current = null;
           shellKindRef.current = null;
-          shellCwdRef.current = null;
           // A console that has gone cannot receive it, and leaving it queued
           // would type it into whatever session replaces this one.
           pendingInjectRef.current = [];
@@ -723,7 +711,6 @@ export function useRunner() {
 
       shellIdRef.current = id;
       shellKindRef.current = info.id;
-      shellCwdRef.current = dir;
       setShell({ id, kind: info.id, running: true, log: null });
 
       try {
@@ -735,6 +722,7 @@ export function useRunner() {
           cols,
           rows,
           onData: channel,
+          recordOutput,
         });
         openingShellRef.current = false;
         // Closed by hand while this was starting: the invite is over, so the
@@ -778,7 +766,6 @@ export function useRunner() {
         openingShellRef.current = false;
         shellIdRef.current = null;
         shellKindRef.current = null;
-        shellCwdRef.current = null;
         pendingInjectRef.current = [];
         injectTriesRef.current = 0;
         if (injectTimerRef.current !== null) {
@@ -790,21 +777,13 @@ export function useRunner() {
         return false;
       }
     },
-    [closeShell, flushPendingInject, resolveShell, writeShell]
+    [closeShell, flushPendingInject, resolveShell, writeShell, recordOutput]
   );
 
-  /**
-   * Keystrokes from the shell pane, forwarded verbatim.
-   *
-   * A submitted line is also what makes the remembered working directory
-   * untrustworthy: the user may have just run a `cd`, and a terminal does not
-   * report where it ended up. Forgetting is what makes the next run state the
-   * directory again instead of running somewhere unexpected.
-   */
+  /** Keystrokes from the shell pane, forwarded verbatim. */
   const sendShellInput = useCallback(async (data: string): Promise<boolean> => {
     const id = shellIdRef.current;
     if (!id) return false;
-    if (data.includes("\n") || data.includes("\r")) shellCwdRef.current = null;
     try {
       await invoke("pty_write", { id, data });
       return true;
@@ -891,7 +870,7 @@ export function useRunner() {
           sinkRef.current?.write(new Uint8Array(msg.data));
         };
         try {
-          await invoke("pty_open", { id, command, args, cwd: dir, cols, rows, onData: channel });
+          await invoke("pty_open", { id, command, args, cwd: dir, cols, rows, onData: channel, recordOutput });
           // Same race as the shell: a fit can land between reading `sizeRef` and
           // the backend registering the session, in which case that resize was
           // rejected. Re-apply the current size so the child formats for the
@@ -934,7 +913,7 @@ export function useRunner() {
       try {
         // The working directory is decided by the caller and validated on the
         // Rust side; passing null means "inherit the app's directory".
-        await invoke("run_program", { id, command, args, cwd: dir });
+        await invoke("run_program", { id, command, args, cwd: dir, recordOutput, outputEncoding });
         return true;
       } catch (err) {
         console.error("Failed to run:", err);
@@ -948,7 +927,7 @@ export function useRunner() {
         return false;
       }
     },
-    [closeTerminal, discardPendingOutput, flushPendingOutput]
+    [closeTerminal, discardPendingOutput, flushPendingOutput, recordOutput, outputEncoding]
   );
 
   /**
@@ -1005,12 +984,7 @@ export function useRunner() {
       const invocation =
         runPrefix(shellKind) +
         [command, ...tokens].map((t) => quoteToken(t, shellKind)).join(" ");
-      // Only stated when it is not already where it should be: a `cd` the user
-      // did not ask for, on every single run, is noise.
-      const line =
-        dir !== null && shellCwdRef.current !== dir
-          ? cdCommand(dir, shellKind) + chain(shellKind) + invocation
-          : invocation;
+      const line = dir === null ? invocation : withWorkingDirectory(dir, shellKind, invocation);
 
       if (!live || starting) {
         // The command line is handed to `openShell` so that it is queued before
@@ -1038,10 +1012,7 @@ export function useRunner() {
       if (hint) {
         writeShell(new TextEncoder().encode(`\x1b[2m${hint}\x1b[0m\r\n`));
       }
-      // The shell is in this directory now, and remembering that is what keeps
-      // the next run from restating it. An exit status from an earlier piped run
-      // means nothing here.
-      shellCwdRef.current = dir;
+      // An exit status from the previous piped run means nothing here.
       setLastExit(null);
       return true;
     },

@@ -224,7 +224,7 @@ export default function OutputPanel({
   const runLog = lastExit?.log ?? null;
   // The bar belongs to the plain-text view only: the terminal scrolls its own
   // history, and a shell has no transcript to trim in the first place.
-  const showTruncated = showText && truncated;
+  const showTruncated = (showText && truncated) || (!showShell && !!runLog?.truncated);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -373,6 +373,13 @@ export default function OutputPanel({
     const id = window.setTimeout(() => shellTermHandleRef.current?.focus(), 0);
     return () => window.clearTimeout(id);
   }, [visible, showShell, shell?.id]);
+
+  useEffect(() => {
+    if (inputHistory.length === 0 && historyPos >= 0) {
+      setHistoryPos(-1);
+      setDraft("");
+    }
+  }, [inputHistory.length, historyPos]);
 
   const historyIndex = useCallback(
     (pos: number) => (pos < 0 ? -1 : inputHistory.length - 1 - pos),
@@ -649,10 +656,9 @@ export default function OutputPanel({
             })}
             className="shrink-0 px-3 py-1 border-b border-line-soft text-left text-xs text-faint hover:text-ink hover:bg-hover transition-colors"
           >
-            {t("output.truncatedCap", {
-              max: MAX_OUTPUT_LINES,
-              total: runLog.lines,
-            })}
+            {runLog.truncated
+              ? t("output.logIncomplete")
+              : t("output.truncatedCap", { max: MAX_OUTPUT_LINES, total: runLog.lines })}
           </button>
         ) : (
           <div className="shrink-0 px-3 py-1 border-b border-line-soft text-xs text-faint">

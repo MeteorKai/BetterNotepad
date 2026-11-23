@@ -28,12 +28,12 @@ export default function StatusBar({
   onChangeEncoding,
 }: StatusBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!menuOpen) return;
     const onDocClick = (e: MouseEvent) => {
-      if (buttonRef.current && !buttonRef.current.contains(e.target as Node)) setMenuOpen(false);
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setMenuOpen(false);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") setMenuOpen(false);
@@ -61,9 +61,9 @@ export default function StatusBar({
         <span>{t("status.lines", { count: totalLines })}</span>
       </div>
       <div className="flex items-center gap-4">
-        <div className="relative">
+        <div ref={menuRef} className="relative">
           <button
-            ref={buttonRef}
+            aria-expanded={menuOpen}
             onClick={() => setMenuOpen((o) => !o)}
             title={t("status.encodingTitle")}
             className="flex items-center gap-1 rounded px-1.5 py-0.5 text-sub hover:text-ink hover:bg-hover transition-colors"

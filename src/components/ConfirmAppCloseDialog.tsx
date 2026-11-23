@@ -3,6 +3,7 @@ import { t } from "../i18n";
 
 interface ConfirmAppCloseDialogProps {
   unsavedTabs: Array<{ id: string; fileName: string }>;
+  saving?: boolean;
   onSaveAll: () => void;
   onDiscardAll: () => void;
   onCancel: () => void;
@@ -10,6 +11,7 @@ interface ConfirmAppCloseDialogProps {
 
 export default function ConfirmAppCloseDialog({
   unsavedTabs,
+  saving = false,
   onSaveAll,
   onDiscardAll,
   onCancel,
@@ -22,17 +24,17 @@ export default function ConfirmAppCloseDialog({
       if (e.key === "Escape") {
         e.preventDefault();
         e.stopImmediatePropagation();
-        onCancel();
+        if (!saving) onCancel();
       }
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onCancel]);
+  }, [onCancel, saving]);
 
   return (
     <div
       className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 backdrop-blur-[2px]"
-      onMouseDown={onCancel}
+      onMouseDown={saving ? undefined : onCancel}
     >
       <div
         className="relative overflow-hidden bg-elevated border border-line rounded-2xl shadow-2xl w-[480px] p-6"
@@ -61,12 +63,14 @@ export default function ConfirmAppCloseDialog({
         </ul>
         <div className="relative flex justify-end gap-2">
           <button
+            disabled={saving}
             onClick={onDiscardAll}
             className="px-3 py-1.5 rounded-md text-sm text-ink bg-hover hover:bg-active transition-colors"
           >
             {t("confirm.discard")}
           </button>
           <button
+            disabled={saving}
             onClick={onCancel}
             className="px-3 py-1.5 rounded-md text-sm text-sub hover:text-ink hover:bg-hover transition-colors"
           >
@@ -74,6 +78,7 @@ export default function ConfirmAppCloseDialog({
           </button>
           <button
             ref={saveRef}
+            disabled={saving}
             onClick={onSaveAll}
             className="px-3 py-1.5 rounded-md text-sm font-medium text-accent-ink bg-accent hover:bg-accent-strong transition-colors"
           >

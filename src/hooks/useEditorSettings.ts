@@ -2,6 +2,8 @@ import { useCallback, useEffect, useState } from "react";
 import type { LocaleSetting } from "../i18n";
 
 export type Eol = "lf" | "crlf";
+export const RUN_OUTPUT_ENCODINGS = ["utf-8", "gb18030", "shift_jis", "windows-1252"] as const;
+export type RunOutputEncoding = (typeof RUN_OUTPUT_ENCODINGS)[number];
 
 /** Where run programmes get their working directory from. */
 export type RunCwdMode = "folder" | "script" | "custom";
@@ -34,6 +36,9 @@ export interface EditorSettings {
    * escape-code-mangling script may need.
    */
   terminalMode: boolean;
+  runOutputEncoding: RunOutputEncoding;
+  recordRunOutput: boolean;
+  rememberStdin: boolean;
   /**
    * Which interactive shell the output panel starts when the user opens one.
    *
@@ -70,6 +75,9 @@ const DEFAULTS: EditorSettings = {
   contextMenu: true,
   bracketMatching: true,
   terminalMode: true,
+  runOutputEncoding: "utf-8",
+  recordRunOutput: false,
+  rememberStdin: false,
   defaultShell: "",
 };
 
@@ -105,6 +113,9 @@ function loadSettings(): EditorSettings {
         typeof p.bracketMatching === "boolean" ? p.bracketMatching : DEFAULTS.bracketMatching,
       terminalMode:
         typeof p.terminalMode === "boolean" ? p.terminalMode : DEFAULTS.terminalMode,
+      runOutputEncoding: RUN_OUTPUT_ENCODINGS.find((encoding) => encoding === p.runOutputEncoding) ?? DEFAULTS.runOutputEncoding,
+      recordRunOutput: p.recordRunOutput === true,
+      rememberStdin: p.rememberStdin === true,
       defaultShell:
         typeof p.defaultShell === "string" ? p.defaultShell : DEFAULTS.defaultShell,
     };

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { open } from "@tauri-apps/plugin-dialog";
+import { ask, open } from "@tauri-apps/plugin-dialog";
+import { invoke } from "@tauri-apps/api/core";
 import type { AppUpdater } from "../hooks/useUpdater";
 import type { InterpreterConfig, ShellInfo } from "../hooks/useRunner";
 import type { useMascot } from "../hooks/useMascot";
@@ -9,6 +10,7 @@ import MascotPortrait from "./MascotPortrait";
 import { t, type LocaleSetting } from "../i18n";
 import {
   FONT_OPTIONS,
+  RUN_OUTPUT_ENCODINGS,
   type EditorSettings,
   type RunCwdMode,
 } from "../hooks/useEditorSettings";
@@ -18,6 +20,7 @@ interface SettingsDialogProps {
   onSet: (language: string, patch: Partial<InterpreterConfig>) => void;
   onApplyDetected: () => void;
   editorSettings: EditorSettings;
+  onClearInputHistory: () => void;
   /** Interactive shells the backend found, for the default-shell picker. */
   shells: ShellInfo[];
   onSetEditor: (
@@ -103,12 +106,31 @@ function EditorSettingsPanel({
   settings,
   onSet,
   shells,
+  onClearInputHistory,
 }: {
   settings: EditorSettings;
+  onClearInputHistory: () => void;
   onSet: (patch: Partial<EditorSettings>) => void;
   /** Interactive shells the backend found, for the default-shell picker. */
   shells: ShellInfo[];
 }) {
+  const desktop = "__TAURI_INTERNALS__" in window;
+  const [clearingLogs, setClearingLogs] = useState(false);
+  const [logStatus, setLogStatus] = useState("");
+  const [historyCleared, setHistoryCleared] = useState(false);
+  const clearRunLogs = async () => {
+    setClearingLogs(true);
+    try {
+      if (!await ask(t("settings.clearRunLogsConfirm"), { kind: "warning" })) return;
+      const result = await invoke<{ removed: number; active: number; failed: number }>("clear_run_logs");
+      setLogStatus(t("settings.clearRunLogsResult", result));
+    } catch (err) {
+      setLogStatus(t("settings.clearRunLogsFailed", { error: String(err) }));
+    } finally {
+      setClearingLogs(false);
+    }
+  };
+
   const browseCwd = async () => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     try {
@@ -204,6 +226,34 @@ function EditorSettingsPanel({
           {t("settings.terminal.hint")}
         </p>
       </div>
+
+      {desktop && <div className="pt-3 border-t border-line-soft space-y-2">
+        {!settings.terminalMode && <Row label={t("settings.runOutputEncoding")}>
+          <select
+            aria-label={t("settings.runOutputEncoding")}
+            value={settings.runOutputEncoding}
+            onChange={(event) => {
+              const encoding = RUN_OUTPUT_ENCODINGS.find((option) => option === event.target.value);
+              if (encoding) onSet({ runOutputEncoding: encoding });
+            }}
+            className="bg-surface text-ink px-2 py-1 rounded-md border border-line text-sm"
+          >
+            {RUN_OUTPUT_ENCODINGS.map((encoding) => <option key={encoding} value={encoding}>{encoding.toUpperCase()}</option>)}
+          </select>
+        </Row>}
+        <Row label={t("settings.recordRunOutput")}>
+          <Toggle checked={settings.recordRunOutput} onChange={(v) => onSet({ recordRunOutput: v })} label={t("settings.recordRunOutput")} />
+          <button type="button" disabled={clearingLogs} onClick={clearRunLogs} className="px-2 py-1 rounded border border-line text-xs">{t("settings.clearRunLogs")}</button>
+        </Row>
+        <p className="text-[11px] text-faint">{t("settings.recordRunOutputHint")}</p>
+        {logStatus && <p role="status" className="text-xs text-sub break-all">{logStatus}</p>}
+        <Row label={t("settings.rememberStdin")}>
+          <Toggle checked={settings.rememberStdin} onChange={(v) => { onSet({ rememberStdin: v }); setHistoryCleared(false); }} label={t("settings.rememberStdin")} />
+          <button type="button" onClick={() => { onClearInputHistory(); setHistoryCleared(true); }} className="px-2 py-1 rounded border border-line text-xs">{t("settings.clearInputHistory")}</button>
+        </Row>
+        <p className="text-[11px] text-faint">{t("settings.rememberStdinHint")}</p>
+        {historyCleared && <p role="status" className="text-xs text-sub">{t("settings.inputHistoryCleared")}</p>}
+      </div>}
 
       <div className="pt-3 border-t border-line-soft space-y-1.5">
         <Row label={t("settings.shell")}>
@@ -385,6 +435,7 @@ export default function SettingsDialog({
   onSet,
   onApplyDetected,
   editorSettings,
+  onClearInputHistory,
   shells,
   onSetEditor,
   onClose,
@@ -502,6 +553,7 @@ export default function SettingsDialog({
               settings={editorSettings}
               onSet={(patch) => onSetEditor(patch)}
               shells={shells}
+              onClearInputHistory={onClearInputHistory}
             />
           ) : tab === "mascot" ? (
             <MascotSettingsPanel mascot={mascot} />

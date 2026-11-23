@@ -1,19 +1,4 @@
-//! Per-run output logs.
-//!
-//! The panel is only a window onto a run. Both renderers keep a bounded number
-//! of lines — xterm's scrollback, and the text view's line cap — because an
-//! unbounded list is what makes the window slow, so a script printing tens of
-//! thousands of lines has its early output scrolled out of reach for good.
-//!
-//! So every run also writes its complete output to a file under the app's log
-//! directory. The panel reports the path when the run ends and offers a button
-//! that opens the file in the editor, where the built-in find can search all of
-//! it. Nothing about the panel's size can hide output any more.
-//!
-//! The log is written by the same threads that read the child's output, not by
-//! the frontend, so a log is complete even when the UI dropped lines: the text
-//! view's cap, a frontend that never drew the tail, or a run the user stopped
-//! early all still leave a full file behind.
+//! Locally retained output, with a disk limit independent of terminal scrollback.
 
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -27,6 +12,7 @@ use tauri::{AppHandle, Manager};
 /// How many run logs to keep. Older ones are deleted when a new run starts, so
 /// the directory stays small without ever touching anything outside it.
 const MAX_RUN_LOGS: usize = 20;
+const MAX_LOG_BYTES: u64 = 16 * 1024 * 1024;
 
 /// The log a finished run produced, in the shape the frontend expects. Carried
 /// on the exit event (piped output) or the exit chunk (terminal output).
@@ -36,12 +22,14 @@ pub struct RunLogInfo {
     /// Lines written, not lines displayed: the panel's cap does not apply here.
     pub lines: u64,
     pub bytes: u64,
+    pub truncated: bool,
 }
 
 struct Inner {
     file: BufWriter<File>,
     bytes: u64,
     lines: u64,
+    truncated: bool,
 }
 
 /// A run's log file. Cloned as an `Arc` into every thread that produces output.
@@ -51,30 +39,28 @@ pub struct RunLog {
 }
 
 impl RunLog {
-    /// Creates the log (and its directory), pruning the oldest files.
-    ///
-    /// The name carries the local start time so a directory listing reads in run
-    /// order. Two runs inside one second would collide on it, hence the suffix
-    /// loop — appending to the previous run's file instead of starting a new one
-    /// would silently merge two runs.
-    pub fn create(dir: &Path) -> std::io::Result<Arc<Self>> {
+    fn create(dir: &Path, active: &HashMap<String, Arc<Self>>) -> std::io::Result<Arc<Self>> {
         fs::create_dir_all(dir)?;
-        // The caller is about to add one, so it may keep one less than the cap.
-        prune(dir, MAX_RUN_LOGS - 1);
+        prune(dir, active)?;
         let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
-        let mut path = dir.join(format!("run-{}.log", stamp));
-        let mut n = 1;
-        while path.exists() {
-            path = dir.join(format!("run-{}-{}.log", stamp, n));
-            n += 1;
-        }
-        let file = OpenOptions::new().create(true).append(true).open(&path)?;
+        // Exclusive creation prevents two runs from ever sharing a file.
+        let mut n = 0;
+        let (path, file) = loop {
+            let name = if n == 0 { format!("run-{stamp}.log") } else { format!("run-{stamp}-{n}.log") };
+            let path = dir.join(name);
+            match OpenOptions::new().write(true).create_new(true).open(&path) {
+                Ok(file) => break (path, file),
+                Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
+                Err(err) => return Err(err),
+            }
+        };
         Ok(Arc::new(Self {
             path,
             inner: Mutex::new(Inner {
                 file: BufWriter::new(file),
                 bytes: 0,
                 lines: 0,
+                truncated: false,
             }),
         }))
     }
@@ -85,7 +71,11 @@ impl RunLog {
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
-        if inner.file.write_all(data).is_err() {
+        if data.is_empty() || inner.truncated {
+            return;
+        }
+        if data.len() as u64 > MAX_LOG_BYTES - inner.bytes || inner.file.write_all(data).is_err() {
+            inner.truncated = true;
             return;
         }
         inner.bytes += data.len() as u64;
@@ -97,10 +87,14 @@ impl RunLog {
         let Ok(mut inner) = self.inner.lock() else {
             return;
         };
-        if inner.file.write_all(line.as_bytes()).is_err() {
+        if inner.truncated {
             return;
         }
-        if inner.file.write_all(b"\r\n").is_err() {
+        if line.len() as u64 + 2 > MAX_LOG_BYTES - inner.bytes
+            || inner.file.write_all(line.as_bytes()).is_err()
+            || inner.file.write_all(b"\r\n").is_err()
+        {
+            inner.truncated = true;
             return;
         }
         inner.bytes += line.len() as u64 + 2;
@@ -111,36 +105,25 @@ impl RunLog {
     /// opens the file the moment the run ends sees the whole thing.
     pub fn flush(&self) {
         if let Ok(mut inner) = self.inner.lock() {
-            let _ = inner.file.flush();
+            if inner.file.flush().is_err() {
+                inner.truncated = true;
+            }
         }
     }
 
     fn info(&self) -> RunLogInfo {
-        let (bytes, lines) = self.stats();
-        RunLogInfo {
-            path: self.path.to_string_lossy().into_owned(),
-            lines,
-            bytes,
-        }
-    }
-
-    /// `(bytes, lines)` written so far.
-    fn stats(&self) -> (u64, u64) {
-        self.inner
-            .lock()
-            .map(|inner| (inner.bytes, inner.lines))
-            .unwrap_or((0, 0))
+        let (bytes, lines, truncated) = self.inner.lock()
+            .map(|inner| (inner.bytes, inner.lines, inner.truncated))
+            .unwrap_or((0, 0, true));
+        RunLogInfo { path: self.path.to_string_lossy().into_owned(), lines, bytes, truncated }
     }
 }
 
 /// Where run logs live: the app's own log directory, so they never land in the
 /// user's project — a script writing to its cwd cannot bury them, and the
 /// project folder stays free of files nobody asked for.
-pub fn log_dir(app: &AppHandle) -> PathBuf {
-    app.path()
-        .app_log_dir()
-        .unwrap_or_else(|_| std::env::temp_dir())
-        .join("runs")
+fn log_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path().app_log_dir().map(|path| path.join("runs")).map_err(|err| err.to_string())
 }
 
 /// Logs of the runs currently in flight, keyed by run id.
@@ -155,25 +138,81 @@ pub struct RunLogs(Mutex<HashMap<String, Arc<RunLog>>>);
 impl RunLogs {
     /// Starts a log for `id`. `None` if the file could not be created — a run
     /// must never fail because its log did.
-    pub fn start(&self, app: &AppHandle, id: &str) -> Option<Arc<RunLog>> {
-        let log = RunLog::create(&log_dir(app)).ok()?;
-        if let Ok(mut map) = self.0.lock() {
-            map.insert(id.to_string(), log.clone());
+    pub fn start(&self, app: &AppHandle, id: &str, enabled: bool) -> Option<Arc<RunLog>> {
+        if !enabled {
+            return None;
         }
+        // Serialize creation with clearing so a new file can't be mistaken
+        // for an old, completed log in the gap before registration.
+        let mut map = self.0.lock().ok()?;
+        let log = RunLog::create(&log_dir(app).ok()?, &map).ok()?;
+        map.insert(id.to_string(), log.clone());
         Some(log)
+    }
+
+    fn clear(&self, dir: &Path) -> Result<ClearLogs, String> {
+        let active = self.0.lock().map_err(|err| err.to_string())?;
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(ClearLogs::default()),
+            Err(err) => return Err(err.to_string()),
+        };
+        let mut result = ClearLogs::default();
+        for entry in entries {
+            let Ok(entry) = entry else { result.failed += 1; continue };
+            let path = entry.path();
+            if !is_run_log(&path) {
+                continue;
+            }
+            if active.values().any(|log| log.path == path) {
+                result.active += 1;
+                continue;
+            }
+            match fs::remove_file(path) {
+                Ok(()) => result.removed += 1,
+                Err(err) if err.kind() == std::io::ErrorKind::NotFound => {},
+                Err(_) => result.failed += 1,
+            }
+        }
+        Ok(result)
     }
 
     /// Removes `id` from the registry, flushes what it wrote and describes it.
     /// Called by whichever thread ends the run, so the exit event can carry the
     /// path. Returns `None` when there was no log (or it was already reported).
     pub fn finish(&self, id: &str) -> Option<RunLogInfo> {
-        let log = match self.0.lock() {
-            Ok(mut map) => map.remove(id),
-            Err(_) => None,
-        }?;
+        let mut active = self.0.lock().ok()?;
+        let log = active.get(id)?;
         log.flush();
-        Some(log.info())
+        let info = log.info();
+        active.remove(id);
+        Some(info)
     }
+}
+
+#[derive(Default, Serialize)]
+pub struct ClearLogs {
+    removed: usize,
+    active: usize,
+    failed: usize,
+}
+
+#[tauri::command]
+pub async fn clear_run_logs(app: AppHandle) -> Result<ClearLogs, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        app.state::<RunLogs>().clear(&log_dir(&app)?)
+    }).await.map_err(|err| err.to_string())?
+}
+
+fn is_run_log(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else { return false };
+    let Some(stamp) = name.strip_prefix("run-").and_then(|name| name.strip_suffix(".log")) else { return false };
+    let mut parts = stamp.split('-');
+    let digits = |part: &str, len| part.len() == len && part.bytes().all(|byte| byte.is_ascii_digit());
+    parts.next().is_some_and(|date| digits(date, 8))
+        && parts.next().is_some_and(|time| digits(time, 6))
+        && parts.next().is_none_or(|suffix| !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit()))
+        && parts.next().is_none()
 }
 
 /// Convenience wrapper for the threads that end a run.
@@ -181,34 +220,40 @@ pub fn finish(app: &AppHandle, id: &str) -> Option<RunLogInfo> {
     app.state::<RunLogs>().finish(id)
 }
 
-/// Deletes all but the `keep` newest logs. Failures are ignored: a log that
-/// cannot be removed is not a reason to refuse to run anything.
-fn prune(dir: &Path, keep: usize) {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    let mut logs: Vec<PathBuf> = entries
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| {
-            path.extension() == Some(std::ffi::OsStr::new("log"))
-                && path
-                    .file_name()
-                    .is_some_and(|name| name.to_string_lossy().starts_with("run-"))
-        })
-        .collect();
-    // The names start with a sortable timestamp, so a plain sort is also
-    // oldest-first.
-    logs.sort();
-    let excess = logs.len().saturating_sub(keep);
-    for path in logs.iter().take(excess) {
-        let _ = fs::remove_file(path);
+// Make space without deleting a live session's log. If all slots are busy or
+// locked, skip recording this run rather than exceed the disk cap.
+fn prune(dir: &Path, active: &HashMap<String, Arc<RunLog>>) -> std::io::Result<()> {
+    let mut logs = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let path = entry?.path();
+        if is_run_log(&path) { logs.push(path); }
     }
+    logs.sort_by_cached_key(|path| {
+        let name = path.file_stem().unwrap_or_default().to_string_lossy();
+        let stamp = &name[4..19];
+        let sequence = name.get(20..).and_then(|suffix| suffix.parse::<u64>().ok()).unwrap_or(0);
+        (stamp.to_owned(), sequence)
+    });
+    let mut count = logs.len();
+    for path in logs {
+        if count < MAX_RUN_LOGS { return Ok(()); }
+        if active.values().any(|log| log.path == path) { continue; }
+        match fs::remove_file(path) {
+            Ok(()) => count -= 1,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => count -= 1,
+            Err(_) => {},
+        }
+    }
+    if count < MAX_RUN_LOGS { Ok(()) } else { Err(std::io::Error::other("Run log directory is full")) }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn create_log(dir: &Path) -> std::io::Result<Arc<RunLog>> {
+        RunLog::create(dir, &HashMap::new())
+    }
 
     fn scratch(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("bn-runlog-{}-{}", name, std::process::id()));
@@ -219,7 +264,7 @@ mod tests {
     #[test]
     fn writes_lines_and_reports_them() {
         let dir = scratch("lines");
-        let log = RunLog::create(&dir).unwrap();
+        let log = create_log(&dir).unwrap();
         log.write_line("hello");
         log.write_line("world");
         log.flush();
@@ -235,7 +280,7 @@ mod tests {
     #[test]
     fn counts_newlines_in_raw_bytes() {
         let dir = scratch("bytes");
-        let log = RunLog::create(&dir).unwrap();
+        let log = create_log(&dir).unwrap();
         // A terminal stream with a carriage return that is not a newline: the
         // byte count grows but the line count must not.
         log.write_bytes(b"progress 50%\rprogress 100%\n");
@@ -248,8 +293,8 @@ mod tests {
     #[test]
     fn two_logs_in_the_same_second_do_not_collide() {
         let dir = scratch("collide");
-        let a = RunLog::create(&dir).unwrap();
-        let b = RunLog::create(&dir).unwrap();
+        let a = create_log(&dir).unwrap();
+        let b = create_log(&dir).unwrap();
         assert_ne!(a.info().path, b.info().path);
         a.write_line("first");
         b.write_line("second");
@@ -272,7 +317,7 @@ mod tests {
         // but prune only ever removes what it named itself.
         fs::write(dir.join("notes.txt"), b"keep me").unwrap();
 
-        RunLog::create(&dir).unwrap();
+        create_log(&dir).unwrap();
 
         let logs = fs::read_dir(&dir)
             .unwrap()
@@ -289,7 +334,7 @@ mod tests {
     #[test]
     fn chunked_raw_bytes_land_byte_for_byte() {
         let dir = scratch("raw");
-        let log = RunLog::create(&dir).unwrap();
+        let log = create_log(&dir).unwrap();
         // Terminal output arrives in arbitrary slices, so a chunk boundary can
         // fall inside a multi-byte character. The log must not care: it takes
         // bytes and never decodes them, which is also what keeps the colours and
@@ -310,11 +355,45 @@ mod tests {
     }
 
     #[test]
+    fn marks_truncated_log_and_stops_at_the_byte_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = create_log(dir.path()).unwrap();
+        let piece = [b'x'; 64 * 1024];
+        for _ in 0..MAX_LOG_BYTES / piece.len() as u64 {
+            log.write_bytes(&piece);
+        }
+        assert!(!log.info().truncated);
+        log.write_line("omitted");
+        log.flush();
+        let info = log.info();
+        assert!(info.truncated);
+        assert_eq!(fs::metadata(info.path).unwrap().len(), MAX_LOG_BYTES);
+    }
+
+    #[test]
+    fn clearing_completed_logs_leaves_active_logs_and_other_files_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let logs = RunLogs::default();
+        let active = create_log(dir.path()).unwrap();
+        logs.0.lock().unwrap().insert("active".into(), active.clone());
+        let completed = dir.path().join("run-20200101-000000.log");
+        let unrelated = dir.path().join("run-notes.log");
+        fs::write(&completed, "old output").unwrap();
+        fs::write(&unrelated, "not a BetterNotepad log").unwrap();
+
+        let result = logs.clear(dir.path()).unwrap();
+        assert_eq!((result.removed, result.active, result.failed), (1, 1, 0));
+        assert!(!completed.exists());
+        assert!(unrelated.is_file());
+        assert!(active.path.is_file());
+    }
+
+    #[test]
     fn registry_hands_the_log_back_once() {
         let dir = scratch("registry");
         fs::create_dir_all(&dir).unwrap();
         let logs = RunLogs::default();
-        let log = RunLog::create(&dir).unwrap();
+        let log = create_log(&dir).unwrap();
         log.write_line("only once");
         logs.0.lock().unwrap().insert("run-1".into(), log);
 

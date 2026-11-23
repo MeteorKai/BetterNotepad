@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { readDir, watchImmediate } from "@tauri-apps/plugin-fs";
 import { sep } from "@tauri-apps/api/path";
+import { t } from "../i18n";
 
 export interface FileNode {
   name: string;
@@ -15,28 +16,13 @@ const SKIP_DIRS = new Set([".git", "node_modules"]);
 
 function parentDir(p: string): string {
   const idx = Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\"));
-  return idx === -1 ? p : p.slice(0, idx);
+  if (idx === 2 && /^[a-z]:/i.test(p)) return p.slice(0, 3);
+  return idx < 0 ? p : p.slice(0, idx) || p.slice(0, 1);
 }
 
-function findNode(node: FileNode | null, path: string): FileNode | null {
-  if (!node) return null;
-  if (node.path === path) return node;
-  if (node.children) {
-    for (const c of node.children) {
-      const r = findNode(c, path);
-      if (r) return r;
-    }
-  }
-  return null;
-}
-
-function isUnderPath(filePath: string, dirPath: string): boolean {
-  if (!filePath.startsWith(dirPath)) return false;
-  return (
-    filePath.length === dirPath.length ||
-    filePath[dirPath.length] === "/" ||
-    filePath[dirPath.length] === "\\"
-  );
+export function pathKey(path: string): string {
+  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
+  return /^(?:[a-z]:|\/\/)/i.test(normalized) ? normalized.toLowerCase() : normalized;
 }
 
 function visibleDirectories(node: FileNode | null, expanded: Set<string>): string[] {
@@ -58,6 +44,9 @@ export function useFileExplorer() {
   const [root, setRoot] = useState<FileNode | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const latestReadsRef = useRef(new Map<string, symbol>());
+  const activeFolder = useRef<string | null>(null);
+  const folderRequest = useRef(0);
+  const [notice, setNotice] = useState<{ message: string; details: string } | null>(null);
 
   const readDirEntries = useCallback(async (dirPath: string): Promise<FileNode[]> => {
     const entries = await readDir(dirPath);
@@ -77,29 +66,32 @@ export function useFileExplorer() {
   }, []);
 
   const openFolder = useCallback(async () => {
+    const request = ++folderRequest.current;
     try {
       const selected = await open({ directory: true, multiple: false });
       if (!selected) return;
       const dir = selected as string;
-      latestReadsRef.current.clear();
       const entries = await readDirEntries(dir);
+      if (request !== folderRequest.current) return;
+      activeFolder.current = dir;
+      latestReadsRef.current.clear();
       const name = dir.split(/[\\/]/).filter(Boolean).pop() || dir;
       setFolderPath(dir);
       setRoot({ name, path: dir, isDir: true, children: entries });
       setExpanded(new Set([dir]));
       setIsOpen(true);
     } catch (err) {
-      console.error("Failed to open folder:", err);
+      if (request === folderRequest.current) setNotice({ message: t("file.folderFailed"), details: String(err) });
     }
   }, [readDirEntries]);
 
   const refreshDir = useCallback(
-    async (dirPath: string): Promise<boolean> => {
+    async (dirPath: string): Promise<FileNode[] | null> => {
       const request = Symbol();
       latestReadsRef.current.set(dirPath, request);
       try {
         const children = await readDirEntries(dirPath);
-        if (latestReadsRef.current.get(dirPath) !== request) return false;
+        if (latestReadsRef.current.get(dirPath) !== request) return null;
         setRoot((r) =>
           updateTreeNode(r, dirPath, (n) => {
             const oldChildren = new Map((n.children ?? []).map((c) => [c.path, c]));
@@ -112,10 +104,10 @@ export function useFileExplorer() {
             };
           })
         );
-        return true;
+        return children;
       } catch (err) {
         console.error("Failed to refresh dir:", dirPath, err);
-        return false;
+        return null;
       }
     },
     [readDirEntries]
@@ -195,7 +187,7 @@ export function useFileExplorer() {
         await refreshDir(parentDir(node.path));
         return newPath;
       } catch (err) {
-        console.error("Failed to rename:", node.path, err);
+        setNotice({ message: t("file.renameFailed", { name: node.name }), details: String(err) });
         return null;
       }
     },
@@ -229,51 +221,45 @@ export function useFileExplorer() {
         await refreshDir(parentPath);
         return newPath;
       } catch (err) {
-        console.error("Failed to create:", parentPath, name, err);
+        setNotice({ message: t("file.createFailed", { name }), details: String(err) });
         return null;
       }
     },
     [refreshDir]
   );
 
-  const ensureExpanded = useCallback(
-    async (dirPath: string) => {
-      const node = findNode(root, dirPath);
-      if (!node) return;
-      if (!node.children || !expanded.has(dirPath)) {
-        if (!(await refreshDir(dirPath))) return;
-      }
-      setExpanded((prev) => {
-        if (prev.has(dirPath)) return prev;
-        const next = new Set(prev);
-        next.add(dirPath);
-        return next;
-      });
-    },
-    [root, expanded, refreshDir]
-  );
-
-  const expandTo = useCallback(
-    async (filePath: string) => {
-      if (!folderPath || !isUnderPath(filePath, folderPath)) return;
-      const ancestors: string[] = [];
-      let cur = parentDir(filePath);
-      while (cur && cur.length >= folderPath.length) {
-        ancestors.unshift(cur);
-        if (cur === folderPath) break;
-        cur = parentDir(cur);
-      }
-      for (const dir of ancestors) {
-        await ensureExpanded(dir);
-      }
-    },
-    [folderPath, ensureExpanded]
-  );
+  const expandTo = useCallback(async (filePath: string) => {
+    if (!root) return;
+    const base = pathKey(root.path);
+    const target = pathKey(filePath);
+    if (target !== base && !target.startsWith(base + "/")) return;
+    const relative = target.slice(base.length).split("/").filter(Boolean);
+    let node: FileNode | undefined = root;
+    const opened: string[] = [];
+    for (const component of relative) {
+      if (!node?.isDir || activeFolder.current !== root.path) return;
+      const nodePath: string = node.path;
+      const children: FileNode[] | null = node.children && expanded.has(nodePath)
+        ? node.children : await refreshDir(nodePath);
+      if (!children) return;
+      opened.push(nodePath);
+      node = children.find((child) => pathKey(child.path) === pathKey(nodePath) + "/" + component);
+    }
+    if (node?.isDir && !opened.includes(node.path)) {
+      if (activeFolder.current !== root.path) return;
+      if (!expanded.has(node.path) && !await refreshDir(node.path)) return;
+      opened.push(node.path);
+    }
+    if (activeFolder.current !== root.path) return;
+    setExpanded((prev) => opened.every((path) => prev.has(path)) ? prev : new Set([...prev, ...opened]));
+  }, [root, expanded, refreshDir]);
 
   const toggle = useCallback(() => setIsOpen((p) => !p), []);
 
   return {
     isOpen,
+    notice,
+    dismissNotice: () => setNotice(null),
     toggle,
     folderPath,
     root,

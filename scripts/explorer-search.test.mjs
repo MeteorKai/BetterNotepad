@@ -163,6 +163,21 @@ test("expanded subfolders refresh without losing cached descendants", async () =
   assert.deepEqual(h.value.root.children[0].children.map((n) => n.name), ["b.txt"]);
 });
 
+test("revealing a Windows path expands every previously unopened ancestor", async () => {
+  const h = harness();
+  const sub = folder + "\\sub";
+  const deep = sub + "\\deep";
+  h.directories.set(folder, [entry("sub", true)]);
+  h.directories.set(sub, [entry("deep", true)]);
+  h.directories.set(deep, [entry("note.md")]);
+  await open(h);
+  await h.value.expandTo("d:/WORK/Sub/Deep/note.md");
+  await h.settle();
+  assert.ok(h.value.expanded.has(sub));
+  assert.ok(h.value.expanded.has(deep));
+  assert.equal(h.value.root.children[0].children[0].children[0].name, "note.md");
+});
+
 test("collapsed directories are refreshed when reopened", async () => {
   const h = harness();
   const sub = `${folder}\\sub`;
@@ -237,6 +252,13 @@ test("reopening the sidebar reconciles changes made while it was hidden", async 
   h.directories.set(folder, [entry("hidden-time.txt")]);
   h.value.toggle(); await h.settle(); await h.flush();
   assert.equal(h.value.root.children[0].name, "hidden-time.txt");
+});
+
+test("search reports skipped input even with no matches", async () => {
+  const h = harness("search", { files: [], filesTruncated: false, filesIncomplete: 2 });
+  elements(h.value, "input")[0].props.onChange({ target: { value: "test" } });
+  h.render(); await h.flush();
+  assert.match(text(h.value), /2 个文件或文件夹/);
 });
 
 for (const [name, filesTruncated, lineTruncated] of [["file limit", true, false], ["line limit", false, true], ["complete results", false, false]]) {

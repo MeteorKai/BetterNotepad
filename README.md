@@ -34,7 +34,7 @@ BetterNotepad 是一款面向 **Windows** 的文本与轻量代码编辑器。�
 
 ## 下载与安装
 
-当前版本：**v0.5.1**（2026-10-25）。前往 **[GitHub Releases](https://github.com/MeteorKai/BetterNotepad/releases)**，下载 `BetterNotepad_0.5.1_x64-setup.exe` 并运行安装。
+前往 **[GitHub Releases](https://github.com/MeteorKai/BetterNotepad/releases)**，下载最新的 `BetterNotepad_<版本>_x64-setup.exe` 并运行安装。
 
 - 当前提供 **Windows x64** 安装包。
 - 如果希望双击 `.txt` 时使用 BetterNotepad，请在 Windows 的“打开方式”中将它设为默认应用；安装程序不能替你保证默认关联。
@@ -46,6 +46,12 @@ BetterNotepad 是一款面向 **Windows** 的文本与轻量代码编辑器。�
 2. **预览 Markdown**：打开 `.md` 文件，在编辑器右上角切换分栏预览。
 3. **运行脚本**：在“设置 → Interpreters”确认解释器路径，打开受支持的脚本后按 `Ctrl+Enter`。需要交互输入时可使用底部终端。
 4. **调整习惯**：用工具栏切换主题，在设置中选择语言、字体、缩进和默认行尾。
+
+### 大文件、草稿和终端日志
+
+- 编辑器最多载入 64 MiB 的单个文件。更大的文本文件仍可通过文件夹搜索查找，超长行也会扫描。
+- 桌面版会话备份总上限为 128 MiB，包含所有草稿和会话信息。超过上限时，应用会提示先将草稿保存到文件，并保留此前的备份。
+- 纯文本运行输出默认使用 UTF-8。关闭终端输出模式后，可在「设置 → 编辑器」选择 GB18030、Shift_JIS 或 Windows-1252。输出日志默认关闭，开启后最多保留 20 份，每份最多 16 MiB。
 
 ### 常用快捷键
 
