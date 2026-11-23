@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { pathKey, type FileNode } from "../hooks/useFileExplorer";
+import type { RecentFile } from "../hooks/useTabs";
 import { t } from "../i18n";
 
 interface FileExplorerProps {
@@ -7,6 +8,7 @@ interface FileExplorerProps {
   expanded: Set<string>;
   activePath: string | null;
   width: number;
+  recent: RecentFile[];
   onOpenFolder: () => void;
   onToggleDir: (node: FileNode) => void;
   onExpandTo: (path: string) => Promise<void>;
@@ -208,6 +210,7 @@ export default function FileExplorer({
   expanded,
   activePath,
   width,
+  recent,
   onOpenFolder,
   onToggleDir,
   onExpandTo,
@@ -321,34 +324,37 @@ export default function FileExplorer({
   );
 
   return (
-    <aside className="shrink-0 bg-panel border-r border-line-soft flex flex-col" style={{ width }}>
-      <div className="h-10 flex items-center justify-between px-3 border-b border-line-soft">
-        <span className="text-xs font-semibold uppercase tracking-wider text-faint">{t("explorer.title")}</span>
+    <aside className="app-sidebar flex flex-col" style={{ width }} aria-label={t("explorer.title")}>
+      <div className="sidebar-heading">
+        <span>{t("workspace.files")}</span>
         <button
           onClick={onClose}
-          className="w-5 h-5 rounded flex items-center justify-center text-faint hover:text-ink hover:bg-hover transition-colors"
+          className="app-tool"
           title={t("explorer.closeTitle")}
+          aria-label={t("explorer.closeTitle")}
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="18" y1="6" x2="6" y2="18" />
-            <line x1="6" y1="6" x2="18" y2="18" />
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="2" />
+            <path d="M9 4v16m8-11-3 3 3 3" />
           </svg>
         </button>
       </div>
-      <div className="flex-1 overflow-auto py-1">
+      <div className="sidebar-content flex-1 min-h-0 overflow-auto">
         {!root ? (
-          <div className="px-3 py-8 flex flex-col items-center gap-3 text-center">
-            <div className="w-10 h-10 rounded-xl bg-accent-soft text-accent flex items-center justify-center">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+          <div className="sidebar-empty">
+            <div className="sidebar-folder-mark">
+              <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                <path d="M2 10h20" />
               </svg>
             </div>
-            <p className="text-sm text-sub">{t("explorer.noFolder")}</p>
-            <button
-              onClick={onOpenFolder}
-              className="px-3 py-1.5 rounded-lg text-sm font-medium text-accent-ink bg-accent hover:bg-accent-strong transition-colors shadow-sm"
-            >
+            <p className="sidebar-empty-title">{t("explorer.noFolder")}</p>
+            <p className="sidebar-empty-hint">{t("workspace.folderHint")}</p>
+            <button type="button" className="sidebar-open" onClick={onOpenFolder}>
               {t("explorer.openFolder")}
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M5 12h14m-6-6 6 6-6 6" />
+              </svg>
             </button>
           </div>
         ) : (
@@ -372,6 +378,30 @@ export default function FileExplorer({
             onContextMenu={handleContextMenu}
           />
         )}
+        <div className="sidebar-recent">
+          <h2>{t("recent.title")}</h2>
+          {recent.length ? (
+            <ul>
+              {recent.slice(0, 5).map((file) => (
+                <li key={file.path}>
+                  <button type="button" title={file.path} onClick={() => onOpenFile(file.path)}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zm0 0v6h6" />
+                    </svg>
+                    <span className="truncate">{file.name}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : <p>{t("recent.empty")}</p>}
+        </div>
+      </div>
+      <div className="sidebar-footer">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="13" rx="2" />
+          <path d="M8 21h8m-4-4v4" />
+        </svg>
+        <span className="truncate">{t("workspace.local")}</span>
       </div>
 
       {menu && (

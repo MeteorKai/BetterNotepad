@@ -12,6 +12,7 @@ interface ToolbarProps {
   hasUnsaved: boolean;
   onOpenFolder: () => void;
   onToggleExplorer: () => void;
+  explorerOpen: boolean;
   onUndo: () => void;
   onRedo: () => void;
   onSearch: () => void;
@@ -69,12 +70,16 @@ function ToolButton({
   title,
   active,
   disabled,
+  label,
+  className = "",
   children,
 }: {
   onClick: () => void;
   title: string;
   active?: boolean;
   disabled?: boolean;
+  label?: string;
+  className?: string;
   children: React.ReactNode;
 }) {
   return (
@@ -83,17 +88,17 @@ function ToolButton({
       title={title}
       disabled={disabled}
       aria-pressed={active}
-      className={`px-2.5 py-1.5 rounded-lg transition-colors duration-150 flex items-center justify-center focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
-        disabled ? "opacity-40 cursor-default" : active ? "accent-chip" : "hover:bg-hover text-sub hover:text-ink"
-      }`}
+      aria-label={title}
+      className={`app-tool ${className}`}
     >
       {children}
+      {label && <span className="app-tool-label">{label}</span>}
     </button>
   );
 }
 
 function Separator() {
-  return <div className="w-px h-5 bg-line-soft mx-1" />;
+  return <span className="toolbar-separator" aria-hidden="true" />;
 }
 
 export default function Toolbar({
@@ -105,6 +110,7 @@ export default function Toolbar({
   hasUnsaved,
   onOpenFolder,
   onToggleExplorer,
+  explorerOpen,
   onUndo,
   onRedo,
   onSearch,
@@ -125,22 +131,87 @@ export default function Toolbar({
   onOpenAbout,
 }: ToolbarProps) {
   return (
-    <div className="app-toolbar relative h-12 flex items-center px-2 gap-0.5 border-b border-line-soft">
-      <div className="relative flex items-center gap-0.5 flex-1 min-w-0">
-        <div className="flex items-center gap-2 pl-1 pr-2 select-none">
-          <div className="w-7 h-7 rounded-[10px] bg-accent-soft text-accent flex items-center justify-center shrink-0 border border-line-soft">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7z" />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="8" y1="13" x2="16" y2="13" />
-              <line x1="8" y1="17" x2="13" y2="17" />
-            </svg>
-          </div>
-          <span className="text-sm font-semibold tracking-tight text-ink">BetterNotepad</span>
+    <header className="app-toolbar">
+      <div className="app-masthead">
+        <div className="app-brand">
+          <svg className="app-brand-mark" width="37" height="37" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+            <rect width="40" height="40" rx="10" fill="currentColor" />
+            <path d="M13 9.5h13a2 2 0 0 1 2 2V30H13a3 3 0 0 1-3-3V12.5a3 3 0 0 1 3-3Z" stroke="var(--accent-ink)" strokeWidth="1.5" />
+            <path d="M14.5 10v19.5M11 25.5h17m-9-10h5m-5 4h4" stroke="var(--accent-ink)" strokeWidth="1.5" strokeLinecap="round" />
+            <path d="M23 25.5V33l-2-1.5L19 33v-7.5" fill="var(--accent-ink)" />
+          </svg>
+          <span className="app-brand-type">
+            <strong>BetterNotepad</strong>
+            <span>{t("workspace.subtitle")}</span>
+          </span>
         </div>
-        <Separator />
+        <button type="button" className="toolbar-find" title={t("toolbar.findTitle")} aria-label={t("toolbar.findTitle")} onClick={onSearch}>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" aria-hidden="true">
+            <circle cx="10.75" cy="10.75" r="6.75" />
+            <path d="m16 16 4 4" />
+          </svg>
+          <span>{t("workspace.find")}</span>
+          <kbd aria-hidden="true">Ctrl F</kbd>
+        </button>
+        <div className="app-utilities">
+          {/* About */}
+          <button
+            onClick={onOpenAbout}
+            title={t("toolbar.aboutTitle")}
+            aria-label={t("toolbar.aboutTitle")}
+            className="app-tool"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="16" x2="12" y2="12" />
+              <line x1="12" y1="8" x2="12.01" y2="8" />
+            </svg>
+          </button>
+
+          {/* Settings */}
+          <button
+            onClick={onOpenSettings}
+            title={t("toolbar.settingsTitle")}
+            aria-label={t("toolbar.settingsAria")}
+            className="app-tool"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
+
+          {/* Mascot toggle */}
+          <button
+            onClick={onToggleMascot}
+            title={mascotVisible ? t("toolbar.mascotHideTitle") : t("toolbar.mascotShowTitle")}
+            aria-label={t("toolbar.mascotAria")}
+            aria-pressed={mascotVisible}
+            className="app-tool"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 3a7 7 0 0 0-7 7v9l2.2-1.8 2.4 1.8 2.4-1.8 2.4 1.8 2.4-1.8L19 19v-9a7 7 0 0 0-7-7z" />
+              <circle cx="9" cy="10" r="1.3" />
+              <circle cx="15" cy="10" r="1.3" />
+            </svg>
+          </button>
+
+          {/* Theme switcher */}
+          <button
+            onClick={onCycleTheme}
+            title={t("toolbar.themeSwitch", { theme: themeTitle(theme) })}
+            aria-label={t("toolbar.themeAria")}
+            className="app-tool theme-tool"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <ThemeIcon theme={theme} />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div className="toolbar-actions">
         {/* File operations */}
-        <ToolButton onClick={onNew} title={t("toolbar.newTitle")}>
+        <ToolButton onClick={onNew} title={t("toolbar.newTitle")} label={t("toolbar.new")}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
             <polyline points="14 2 14 8 20 8" />
@@ -148,9 +219,9 @@ export default function Toolbar({
             <line x1="9" y1="15" x2="15" y2="15" />
           </svg>
         </ToolButton>
-        <ToolButton onClick={onOpen} title={t("toolbar.openTitle")}>
+        <ToolButton onClick={onOpen} title={t("toolbar.openTitle")} label={t("workspace.openFile")}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            <path d="M3 7v12a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-8L9 4H5a2 2 0 0 0-2 2v1m1 12 3-9h15l-2 9" />
           </svg>
         </ToolButton>
         <ToolButton onClick={onSave} title={t("toolbar.saveTitle")}>
@@ -179,9 +250,10 @@ export default function Toolbar({
         <ToolButton onClick={onOpenFolder} title={t("toolbar.openFolderTitle")}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+            <path d="M12 10v7m-3.5-3.5h7" />
           </svg>
         </ToolButton>
-        <ToolButton onClick={onToggleExplorer} title={t("toolbar.explorerTitle")}>
+        <ToolButton onClick={onToggleExplorer} title={explorerOpen ? t("toolbar.explorerTitle") : t("app.showExplorer")} active={explorerOpen}>
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="3" y1="3" x2="3" y2="21" />
             <rect x="7" y="3" width="14" height="18" rx="1" />
@@ -202,30 +274,6 @@ export default function Toolbar({
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <polyline points="23 4 23 10 17 10" />
             <path d="M20.49 15a9 9 0 1 1-2.13-9.36L23 10" />
-          </svg>
-        </ToolButton>
-
-        <Separator />
-
-        {/* Run */}
-        <ToolButton onClick={onRun} title={running ? t("toolbar.stopTitle") : t("toolbar.runTitle")}>
-          {running ? (
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="6" y="6" width="12" height="12" rx="1" />
-            </svg>
-          ) : (
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polygon points="6 3 20 12 6 21 6 3" />
-            </svg>
-          )}
-        </ToolButton>
-
-        <Separator />
-
-        <ToolButton onClick={onSearch} title={t("toolbar.findTitle")}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="11" cy="11" r="8" />
-            <line x1="21" y1="21" x2="16.65" y2="16.65" />
           </svg>
         </ToolButton>
 
@@ -256,63 +304,21 @@ export default function Toolbar({
             <path d="M4 19h6v-2H4v2zM20 5H4v2h16V5zm-3 6H4v2h13.25c1.1 0 2 .9 2 2s-.9 2-2 2H15v-2l-3 3 3 3v-2h2c2.21 0 4-1.79 4-4s-1.79-4-4-4z" />
           </svg>
         </ToolButton>
+
+        {/* Run */}
+        <ToolButton onClick={onRun} title={running ? t("toolbar.stopTitle") : t("toolbar.runTitle")} label={running ? t("toolbar.stop") : t("toolbar.run")} className="toolbar-run">
+          {running ? (
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="6" y="6" width="12" height="12" rx="1" />
+            </svg>
+          ) : (
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="6 3 20 12 6 21 6 3" />
+            </svg>
+          )}
+        </ToolButton>
+
       </div>
-
-      {/* About */}
-      <button
-        onClick={onOpenAbout}
-        title={t("toolbar.aboutTitle")}
-        aria-label={t("toolbar.aboutTitle")}
-        className="relative flex items-center justify-center w-8 h-8 rounded-lg text-sub hover:bg-hover hover:text-ink transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="10" />
-          <line x1="12" y1="16" x2="12" y2="12" />
-          <line x1="12" y1="8" x2="12.01" y2="8" />
-        </svg>
-      </button>
-
-      {/* Settings */}
-      <button
-        onClick={onOpenSettings}
-        title={t("toolbar.settingsTitle")}
-        aria-label={t("toolbar.settingsAria")}
-        className="relative flex items-center justify-center w-8 h-8 rounded-lg text-sub hover:bg-hover hover:text-ink transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <circle cx="12" cy="12" r="3" />
-          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-        </svg>
-      </button>
-
-      {/* Mascot toggle */}
-      <button
-        onClick={onToggleMascot}
-        title={mascotVisible ? t("toolbar.mascotHideTitle") : t("toolbar.mascotShowTitle")}
-        aria-label={t("toolbar.mascotAria")}
-        aria-pressed={mascotVisible}
-        className={`relative flex items-center justify-center w-8 h-8 rounded-lg transition-colors focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent ${
-          mascotVisible ? "accent-chip" : "text-sub hover:bg-hover hover:text-ink"
-        }`}
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M12 3a7 7 0 0 0-7 7v9l2.2-1.8 2.4 1.8 2.4-1.8 2.4 1.8 2.4-1.8L19 19v-9a7 7 0 0 0-7-7z" />
-          <circle cx="9" cy="10" r="1.3" />
-          <circle cx="15" cy="10" r="1.3" />
-        </svg>
-      </button>
-
-      {/* Theme switcher */}
-      <button
-        onClick={onCycleTheme}
-        title={t("toolbar.themeSwitch", { theme: themeTitle(theme) })}
-        aria-label={t("toolbar.themeAria")}
-        className="relative flex items-center justify-center w-8 h-8 rounded-lg accent-chip focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
-      >
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <ThemeIcon theme={theme} />
-        </svg>
-      </button>
-    </div>
+    </header>
   );
 }

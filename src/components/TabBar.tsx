@@ -143,23 +143,23 @@ export default function TabBar({
   }, [dragId, onMoveTab]);
 
   return (
-    <div className="relative h-11">
+    <div className="tab-strip relative shrink-0">
       <div
-        className="h-11 bg-panel-2 flex items-center px-2 border-b border-line-soft overflow-x-auto"
+        className="tab-scroll"
         onContextMenu={(e) => {
           if ((e.target as HTMLElement).closest("[data-tab-id], button, input")) return;
           e.preventDefault();
           setContextMenu({ x: e.clientX, y: e.clientY });
         }}
       >
-        <div className="flex items-center min-h-full gap-1">
+        <div className="tab-track">
         {tabs.map((tab) => {
           const active = tab.id === activeTabId;
           const renaming = tab.id === renamingId;
           const dragging = dragId === tab.id;
           const cls = [
-            "group flex items-center gap-2 px-3 h-8 rounded-lg text-sm whitespace-nowrap select-none cursor-pointer border transition-colors",
-            active ? "bg-editor border-line text-ink shadow-sm" : "bg-transparent border-transparent text-sub hover:bg-hover hover:text-ink",
+            "document-tab",
+            active ? "document-tab-active" : "",
             dragging ? "opacity-40" : "",
           ].join(" ");
           return (
@@ -180,6 +180,7 @@ export default function TabBar({
               onDoubleClick={() => startRename(tab)}
               title={tab.filePath ?? tab.fileName}
               data-tab-id={tab.id}
+              aria-current={active ? "true" : undefined}
               className={cls}
             >
               {renaming ? (
@@ -194,8 +195,11 @@ export default function TabBar({
                 />
               ) : (
                 <>
+                  <svg className="document-tab-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zm0 0v6h6M8 13h8m-8 4h5" />
+                  </svg>
                   <span className="max-w-[160px] truncate">{tab.fileName}</span>
-                  {tab.modified && <span className="w-2 h-2 rounded-full bg-accent shrink-0" />}
+                  {tab.modified && <span className="w-1.5 h-1.5 rounded-full bg-accent shrink-0" />}
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
@@ -204,6 +208,7 @@ export default function TabBar({
                     onDoubleClick={(e) => e.stopPropagation()}
                     className="w-4 h-4 rounded flex items-center justify-center text-faint hover:bg-hover hover:text-ink shrink-0"
                     title={t("tab.close")}
+                    aria-label={t("tab.close")}
                   >
                     <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <line x1="18" y1="6" x2="6" y2="18" />
@@ -217,8 +222,9 @@ export default function TabBar({
         })}
         <button
           onClick={onNew}
-          className="w-7 h-7 rounded-lg text-faint hover:text-ink hover:bg-hover flex items-center justify-center shrink-0 transition-colors"
+          className="app-tool tab-add"
           title={t("tab.newTitle")}
+          aria-label={t("tab.newTitle")}
         >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="12" y1="5" x2="12" y2="19" />

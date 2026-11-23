@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ENCODING_OPTIONS } from "../hooks/useTabs";
+import type { Eol } from "../hooks/useEditorSettings";
 import { t } from "../i18n";
 
 interface StatusBarProps {
@@ -12,6 +13,7 @@ interface StatusBarProps {
   largeFile: boolean;
   selectionLen: number;
   encoding: string;
+  eol: Eol;
   onChangeEncoding: (encoding: string) => void;
 }
 
@@ -25,6 +27,7 @@ export default function StatusBar({
   largeFile,
   selectionLen,
   encoding,
+  eol,
   onChangeEncoding,
 }: StatusBarProps) {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -49,8 +52,8 @@ export default function StatusBar({
   const currentLabel = ENCODING_OPTIONS.find((o) => o.id === encoding)?.label ?? encoding;
 
   return (
-    <div className="h-8 bg-panel-2 flex items-center justify-between px-4 text-xs text-sub border-t border-line-soft">
-      <div className="flex items-center gap-4">
+    <footer className="app-status">
+      <div className="status-group">
         <span className="flex items-center gap-2">
           <span className="w-1.5 h-1.5 rounded-full bg-accent opacity-70" />
           {t("status.line", { line, col })}
@@ -58,9 +61,9 @@ export default function StatusBar({
         {selectionLen > 0 && (
           <span className="text-accent">{t("status.selected", { count: selectionLen })}</span>
         )}
-        <span>{t("status.lines", { count: totalLines })}</span>
+        <span className="status-secondary">{t("status.lines", { count: totalLines })}</span>
       </div>
-      <div className="flex items-center gap-4">
+      <div className="status-group status-meta">
         <div ref={menuRef} className="relative">
           <button
             aria-expanded={menuOpen}
@@ -92,7 +95,8 @@ export default function StatusBar({
             </div>
           )}
         </div>
-        <span title={insertSpaces ? t("status.indentSpaces") : t("status.indentTabs")}>
+        <span title={t("status.eol")}>{eol.toUpperCase()}</span>
+        <span className="status-secondary" title={insertSpaces ? t("status.indentSpaces") : t("status.indentTabs")}>
           {insertSpaces
             ? t("status.spaces", { size: tabWidth })
             : t("status.tabWidth", { size: tabWidth })}
@@ -102,8 +106,8 @@ export default function StatusBar({
             {t("status.highlightOff")}
           </span>
         )}
-        <span>{fontSize}px</span>
+        <span className="status-secondary">{fontSize}px</span>
       </div>
-    </div>
+    </footer>
   );
 }

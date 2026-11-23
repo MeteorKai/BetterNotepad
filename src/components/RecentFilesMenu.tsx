@@ -33,9 +33,10 @@ export default function RecentFilesMenu({ recent, onOpen, onClear }: RecentFiles
       <button
         onClick={() => setOpen((o) => !o)}
         title={t("recent.title")}
+        aria-label={t("recent.title")}
         aria-haspopup="true"
         aria-expanded={open}
-        className="px-2.5 py-1.5 rounded-md hover:bg-hover text-sub hover:text-ink transition-colors duration-150 flex items-center justify-center focus-visible:outline focus-visible:outline-1 focus-visible:outline-accent"
+        className="app-tool"
       >
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <circle cx="12" cy="12" r="10" />

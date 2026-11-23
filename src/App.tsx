@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { ask } from "@tauri-apps/plugin-dialog";
 import Toolbar from "./components/Toolbar";
+import BlankPage from "./components/BlankPage";
 import Editor, {
   clearEditorHistory,
   type EditorHandle,
@@ -111,7 +112,11 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
 
   // Sync the i18n layer before children render, so `t()` is already correct on
   // this pass and a language change needs no extra effect or re-render.
-  setI18nLocale(resolveLocale(editorSettings.locale));
+  const locale = resolveLocale(editorSettings.locale);
+  setI18nLocale(locale);
+  useEffect(() => {
+    document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
+  }, [locale]);
 
   const {
     tabs,
@@ -351,7 +356,7 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
 
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     const n = Number(localStorage.getItem("betternotepad.sidebarWidth"));
-    return Number.isFinite(n) && n > 0 ? n : 240;
+    return Number.isFinite(n) && n > 0 ? n : 218;
   });
   useEffect(() => {
     try {
@@ -873,7 +878,7 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
 
   return (
     <>
-    <div inert={updater.busy || closeSaving} className="h-screen bg-surface text-ink flex flex-col select-none overflow-hidden">
+    <div inert={updater.busy || closeSaving} className="app-shell h-screen bg-surface text-ink flex flex-col select-none overflow-hidden">
       <Toolbar
         onNew={newTab}
         onOpen={openTab}
@@ -883,6 +888,7 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
         hasUnsaved={unsavedTabs.length > 0}
         onOpenFolder={explorer.openFolder}
         onToggleExplorer={explorer.toggle}
+        explorerOpen={explorer.isOpen}
         onUndo={handleUndo}
         onRedo={handleRedo}
         onSearch={toggleSearch}
@@ -903,26 +909,6 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
         onOpenSettings={() => setSettingsOpen(true)}
         onOpenAbout={() => setAboutOpen(true)}
       />
-      <TabBar
-        tabs={tabs}
-        activeTabId={activeTabId}
-        onActivate={activateTab}
-        onClose={requestClose}
-        onNew={newTab}
-        onRename={renameTab}
-        onMoveTab={moveTab}
-        canReopenClosedTab={canReopenClosedTab}
-        onReopenClosedTab={reopenClosedTab}
-      />
-      {showSearch && (
-        <SearchBar
-          key={activeTab.id}
-          editorRef={editorRef}
-          onClose={closeSearch}
-          showReplace={showReplace}
-          onToggleReplace={() => setShowReplace((prev) => !prev)}
-        />
-      )}
       {(fileNotice || explorer.notice || sessionError) && (
         <div className="px-4 py-2 bg-panel border-b border-line text-sm text-ink space-y-1">
           {fileNotice && (
@@ -958,14 +944,15 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
           onClose={() => setGlobalSearchOpen(false)}
         />
       )}
-      <div className="flex-1 flex overflow-hidden">
-        {explorer.isOpen ? (
-          <>
+      <div className="app-workbench flex-1 min-h-0 flex overflow-hidden">
+        {explorer.isOpen && (
+          <div className="app-sidebar-slot flex shrink-0">
             <FileExplorer
               root={explorer.root}
               expanded={explorer.expanded}
               activePath={activeTab.filePath}
               width={sidebarWidth}
+              recent={recentFiles}
               onOpenFolder={explorer.openFolder}
               onToggleDir={explorer.toggleDir}
               onExpandTo={explorer.expandTo}
@@ -976,21 +963,31 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
               onClose={explorer.toggle}
             />
             <ResizeHandle onDrag={handleSidebarDrag} />
-          </>
-        ) : (
-          <button
-            onClick={explorer.toggle}
-            title={t("app.showExplorer")}
-            className="w-5 shrink-0 flex items-center justify-center bg-panel border-r border-line-soft text-faint hover:text-ink hover:bg-hover transition-colors"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
-          </button>
+          </div>
         )}
-        <div className="flex-1 overflow-hidden p-3 flex flex-col gap-2">
+        <main className="app-workspace flex-1 min-w-0 overflow-hidden flex flex-col">
+          <TabBar
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onActivate={activateTab}
+            onClose={requestClose}
+            onNew={newTab}
+            onRename={renameTab}
+            onMoveTab={moveTab}
+            canReopenClosedTab={canReopenClosedTab}
+            onReopenClosedTab={reopenClosedTab}
+          />
+          {showSearch && (
+            <SearchBar
+              key={activeTab.id}
+              editorRef={editorRef}
+              onClose={closeSearch}
+              showReplace={showReplace}
+              onToggleReplace={() => setShowReplace((prev) => !prev)}
+            />
+          )}
           {activeTab.externalChange && !activeTab.needsDiskLoad && (
-            <div role="status" className="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-line bg-elevated px-3 py-2 text-sm shadow-card">
+            <div role="status" className="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-elevated px-3 py-2 text-sm">
               <span className="text-warn" aria-hidden="true">●</span>
               <div className="min-w-0 flex-1">
                 <span className="font-medium text-ink">
@@ -1025,9 +1022,9 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
               </div>
             </div>
           )}
-          <div ref={splitRef} className="flex-1 min-h-0 flex">
+          <div ref={splitRef} className="flex-1 min-h-0 flex bg-panel-2">
             <div
-              className="relative rounded-2xl border border-line shadow-card overflow-hidden bg-editor"
+              className="editor-paper relative overflow-hidden bg-editor"
               style={{ flex: previewOpen && isMarkdown ? editorRatio : 1, minWidth: 0 }}
             >
               {activeTab.needsDiskLoad ? (
@@ -1055,10 +1052,15 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
                 wrap={wrap}
                 bracketMatching={editorSettings.bracketMatching}
               />}
+              {!activeTab.filePath && !activeTab.fileHandle && !activeTab.content && !activeTab.modified &&
+                (activeTab.isDefaultPlaceholder || activeTab.fileName === t("tab.untitled")) && !showSearch && (
+                <BlankPage onWrite={() => editorRef.current?.focusEditor()} onOpen={openTab} />
+              )}
               {isMarkdown && (
                 <button
                   onClick={() => setPreviewOpen((o) => !o)}
                   title={t(previewOpen ? "preview.hide" : "preview.show")}
+                  aria-pressed={previewOpen}
                   className={`absolute top-2 right-6 z-10 flex items-center justify-center w-7 h-7 rounded-md shadow-card transition-colors ${
                     previewOpen ? "accent-chip" : "bg-elevated border border-line text-sub hover:text-ink hover:bg-hover"
                   }`}
@@ -1074,7 +1076,7 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
               <>
                 <ResizeHandle onDrag={handleSplitDrag} />
                 <div
-                  className="rounded-2xl border border-line shadow-card overflow-hidden bg-editor"
+                  className="overflow-hidden bg-editor"
                   style={{ flex: 1 - editorRatio, minWidth: 0 }}
                 >
                   <MarkdownPreview content={activeTab.content} tabId={activeTab.id} />
@@ -1082,7 +1084,7 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
               </>
             )}
           </div>
-        </div>
+        </main>
       </div>
       {(outputOpen || outputMounted) && (
         <OutputPanel
@@ -1131,6 +1133,7 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
         largeFile={activeLargeFile}
         selectionLen={selectionLen}
         encoding={activeTab.encoding}
+        eol={activeTab.eol ?? editorSettings.defaultEol}
         onChangeEncoding={(enc) => setTabEncoding(activeTab.id, enc)}
       />
       {isDragOver && (

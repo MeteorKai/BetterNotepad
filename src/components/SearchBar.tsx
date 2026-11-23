@@ -154,7 +154,7 @@ export default function SearchBar({
   return (
     <div className="relative bg-panel border-b border-line-soft px-4 py-2 flex flex-col gap-2">
       <div className="pointer-events-none absolute inset-0 pattern-dots" />
-      <div className="relative flex items-center gap-2">
+      <div className="relative flex flex-wrap items-center gap-2">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-faint shrink-0">
           <circle cx="11" cy="11" r="8" />
           <line x1="21" y1="21" x2="16.65" y2="16.65" />
@@ -166,7 +166,7 @@ export default function SearchBar({
           onChange={(e) => handleQueryChange(e.target.value)}
           onKeyDown={handleFindKeyDown}
           placeholder={t("search.placeholder")}
-          className="bg-editor text-ink px-3 py-1 rounded-md border border-line outline-none focus:border-accent text-sm w-64 transition-colors"
+          className="bg-editor text-ink px-3 py-1 rounded-md border border-line outline-none focus:border-accent text-sm w-64 min-w-0 max-w-[calc(100%-24px)] transition-colors"
         />
         <CtrlButton onClick={toggleCase} title={t("search.caseSensitive")} active={caseSensitive}>
           <span className="text-xs font-medium">Aa</span>
@@ -206,14 +206,14 @@ export default function SearchBar({
         </CtrlButton>
       </div>
       {showReplace && (
-        <div className="relative flex items-center gap-2 pl-6">
+        <div className="relative flex flex-wrap items-center gap-2 pl-6">
           <input
             type="text"
             value={replace}
             onChange={(e) => setReplace(e.target.value)}
             onKeyDown={handleReplaceKeyDown}
             placeholder={t("search.replacePlaceholder")}
-            className="bg-editor text-ink px-3 py-1 rounded-md border border-line outline-none focus:border-accent text-sm w-64 transition-colors"
+            className="bg-editor text-ink px-3 py-1 rounded-md border border-line outline-none focus:border-accent text-sm w-64 max-w-full transition-colors"
           />
           <button
             onClick={doReplace}

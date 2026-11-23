@@ -39,7 +39,7 @@ function visibleDirectories(node: FileNode | null, expanded: Set<string>): strin
 }
 
 export function useFileExplorer() {
-  const [isOpen, setIsOpen] = useState(false);
+  const [isOpen, setIsOpen] = useState(() => window.innerWidth >= 691);
   const [folderPath, setFolderPath] = useState<string | null>(null);
   const [root, setRoot] = useState<FileNode | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());

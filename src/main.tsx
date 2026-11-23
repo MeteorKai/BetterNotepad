@@ -4,6 +4,7 @@ import App from "./App";
 import { invoke } from "@tauri-apps/api/core";
 import type { DesktopSession } from "./hooks/useTabs";
 import "./styles.css";
+import "./workbench.css";
 
 async function start() {
   let desktopSession: DesktopSession | undefined;
