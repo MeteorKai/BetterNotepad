@@ -682,6 +682,11 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
             e.preventDefault();
             openSearch(true);
             break;
+          case "b":
+            if (e.altKey || e.shiftKey) break;
+            e.preventDefault();
+            explorer.toggle();
+            break;
           case "w":
             e.preventDefault();
             requestClose(activeTabId);
@@ -730,7 +735,7 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [newTab, openTab, saveActive, saveActiveAs, openSearch, closeSearch, requestClose, activeTabId, cycleTabs, handleZoomIn, handleZoomOut, handleRun, showSearch, appClosingTabs]);
+  }, [newTab, openTab, saveActive, saveActiveAs, openSearch, closeSearch, requestClose, activeTabId, cycleTabs, handleZoomIn, handleZoomOut, handleRun, showSearch, appClosingTabs, explorer]);
 
   useEffect(() => {
     const hasFiles = (e: DragEvent) =>
@@ -964,6 +969,20 @@ function App({ desktopSession }: { desktopSession?: DesktopSession } = {}) {
             />
             <ResizeHandle onDrag={handleSidebarDrag} />
           </div>
+        )}
+        {!explorer.isOpen && (
+          <button
+            type="button"
+            className="sidebar-expand-handle"
+            onClick={explorer.toggle}
+            title={t("app.showExplorer")}
+            aria-label={t("app.showExplorer")}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="4" width="18" height="16" rx="2" />
+              <path d="M9 4v16m-3-7 3-3m-3 3 3 3" />
+            </svg>
+          </button>
         )}
         <main className="app-workspace flex-1 min-w-0 overflow-hidden flex flex-col">
           <TabBar

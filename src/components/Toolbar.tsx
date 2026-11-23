@@ -142,7 +142,6 @@ export default function Toolbar({
           </svg>
           <span className="app-brand-type">
             <strong>BetterNotepad</strong>
-            <span>{t("workspace.subtitle")}</span>
           </span>
         </div>
         <button type="button" className="toolbar-find" title={t("toolbar.findTitle")} aria-label={t("toolbar.findTitle")} onClick={onSearch}>

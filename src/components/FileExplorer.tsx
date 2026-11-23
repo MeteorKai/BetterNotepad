@@ -349,7 +349,6 @@ export default function FileExplorer({
               </svg>
             </div>
             <p className="sidebar-empty-title">{t("explorer.noFolder")}</p>
-            <p className="sidebar-empty-hint">{t("workspace.folderHint")}</p>
             <button type="button" className="sidebar-open" onClick={onOpenFolder}>
               {t("explorer.openFolder")}
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
